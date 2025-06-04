@@ -1033,6 +1033,36 @@
                         card.appendChild(fileItem);
                     });
                 }
+                if (llmResponse.files_to_write && llmResponse.files_to_write.length > 0) {
+                    const filesWriteTitle = document.createElement('div');
+                    filesWriteTitle.className = 'thought-actions-title';
+                    filesWriteTitle.innerHTML = '<i class="fas fa-file-signature"></i> 计划写入文件:'; // Using a different icon
+                    card.appendChild(filesWriteTitle);
+                    llmResponse.files_to_write.forEach(fileWriteObj => {
+                        const fileWriteItem = document.createElement('div');
+                        fileWriteItem.className = 'thought-action-item thought-file-item'; // Can reuse thought-file-item or create a new style
+
+                        let displayText = `路径: ${escapeHtml(fileWriteObj.path || 'N/A')}`;
+                        if (fileWriteObj.description) {
+                            displayText += ` (${escapeHtml(fileWriteObj.description)})`;
+                        }
+                        // Optionally, show a snippet of the content or its length for very long content
+                        let contentPreview = "";
+                        if (typeof fileWriteObj.content === 'string') {
+                            if (fileWriteObj.content.length > 100) { // Show first 100 chars if too long
+                                contentPreview = `: "${escapeHtml(fileWriteObj.content.substring(0, 100))}..." (长度: ${fileWriteObj.content.length})`;
+                            } else {
+                                contentPreview = `: "${escapeHtml(fileWriteObj.content)}"`;
+                            }
+                        } else {
+                            contentPreview = ": (内容无效或缺失)";
+                        }
+                        displayText += contentPreview;
+
+                        fileWriteItem.textContent = displayText; // <--- 这部分将被修改
+                        card.appendChild(fileWriteItem);
+                    });
+                }
 
                 if (!llmResponse.thought_summary &&
                     (!llmResponse.commands_to_execute || llmResponse.commands_to_execute.length === 0) &&

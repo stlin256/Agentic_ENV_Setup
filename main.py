@@ -44,7 +44,7 @@ DEFAULT_SYSTEM_PROMPT_TEMPLATE = (
     "\n    // 如果本轮指定了`files_to_read`，则此数组将被忽略，应设置为空数组 `[]` 或省略。"
     "\n    // 如果没有命令要执行（例如，等待文件读取结果，或配置已完成），则此键可省略或设置为空数组 `[]`。"
     "\n    { "
-    "\n      \"command_line\": \"(字符串, 必需) 要执行的单行shell命令。严禁使用 `&&` 或 `;` 连接多个逻辑命令。每个逻辑操作应是数组中的一个独立命令对象。\",\n"
+    "\n      \"command_line\": \"(字符串, 必需) 要执行的单行shell命令。每个逻辑操作应是数组中的一个独立命令对象，但是如果需要设置环境变量等必须一次执行多个命令的场景，可以使用 `;` 来连接，严禁使用 `&&` 连接多个逻辑命令。\",\n"
     "      \"description\": \"(字符串, 必需, 中文) 对该命令目的的简短中文描述。\"\n"
     "    }"
     "\n    // ... (更多命令对象) ... "
@@ -506,7 +506,7 @@ def read_project_files(sid: str, project_root: str, relative_paths: List[str]) -
     current_read_chars_this_call = 0
 
     for rel_path_raw in relative_paths:
-        rel_path = rel_path_raw.strip().replace("`", "").replace("'", "").replace("\"", "")
+        rel_path = rel_path_raw.strip()#.replace("`", "").replace("'", "").replace("\"", "")
         if not rel_path: continue
         if ".." in rel_path or os.path.isabs(rel_path):
             msg = f"文件读取错误：不允许的路径格式 '{rel_path_raw}'。"
@@ -889,7 +889,7 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
         print(
             f"SID {sid}: Sending prompt to LLM. System prompt length: {display_sys_prompt_len}, User input length: {display_user_input_len}, Total: {display_sys_prompt_len + display_user_input_len}")
 
-        socketio.emit('status_update', {'message': "请求主LLM分析及指令...", 'type': 'info'}, room=sid, namespace='/')
+        socketio.emit('status_update', {'message': "请求LLM分析及指令...", 'type': 'info'}, room=sid, namespace='/')
         accumulated_llm_text = ""
         socketio.emit('llm_stream_clear', {}, room=sid, namespace='/')
         try:
