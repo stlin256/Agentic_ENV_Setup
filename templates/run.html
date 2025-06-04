@@ -1,0 +1,396 @@
+<!-- templates/run.html -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>项目自动配置助手</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        body { font-family: "Microsoft YaHei", "微软雅黑", Arial, sans-serif; margin: 0; padding: 0; background-color: #eef0f2; color: #333; display: flex; flex-direction: column; min-height: 100vh; font-size: 14px;}
+        .header { background-color: #343a40; color: white; padding: 15px 25px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); z-index: 1000; }
+        .header h1 { margin: 0; font-size: 1.6em; }
+        .container { display: flex; flex: 1; padding: 15px; gap: 15px; overflow: hidden; }
+        .controls-panel { flex: 0 0 380px; background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
+        .logs-container { flex: 1; display: flex; flex-direction: column; gap: 15px; overflow: hidden; }
+        .log-panel { background-color: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); display: flex; flex-direction: column; overflow: hidden; }
+        .log-panel h3 { font-size: 1.1em; color: #495057; background-color: #f8f9fa; padding: 10px 15px; margin: 0; border-bottom: 1px solid #e9ecef; display: flex; align-items: center; }
+        .log-panel h3 span[role="img"] { margin-right: 8px; font-size: 1.2em;}
+        .log-box { padding: 10px; overflow-y: auto; font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace; font-size: 0.85em; line-height: 1.5; flex-grow: 1; white-space: pre-wrap; word-break: break-all; }
+        .placeholder { color: #aaa; font-style: italic; padding: 5px; } /* Added padding to placeholder */
+
+        #llmPromptArea { min-height: 100px; max-height: 180px; background-color: #fdfdfe; color: #333;}
+        #llmThinkingArea { min-height: 120px; max-height: 250px; background-color: #e9f7fd; color: #0c5460;}
+        #llmHistoryArea { min-height: 150px; max-height: 300px; background-color: #f0fff0; }
+        #llmRawResponseDebugArea { min-height: 80px; max-height: 150px; background-color: #fff3cd; color: #664d03; }
+        #statusArea { min-height: 100px; max-height: 200px; }
+
+        /* Terminal-like styling for outputArea */
+        #outputArea {
+            flex-grow: 1;
+            background-color: #1e1e1e; /* Dark background like VSCode terminal */
+            color: #d4d4d4;       /* Light grey text */
+            min-height: 200px;
+            padding: 10px;        /* Padding inside the black box */
+            font-family: Consolas, "Courier New", monospace; /* Monospaced font */
+            font-size: 13px;      /* Typical terminal font size */
+            line-height: 1.4;     /* Spacing between lines */
+            overflow-y: auto;
+            white-space: pre-wrap; /* Preserve whitespace, wrap long lines */
+            word-break: break-all; /* Break long words if they overflow */
+        }
+        .command-output-line {
+            /* white-space: pre; /* This might prevent wrapping if pre-wrap on parent is not enough */
+            /* For \r to work correctly, we often want the browser *not* to auto-wrap this specific div */
+            /* but let the parent pre-wrap handle overall block. Let's test current setup first. */
+            display: block; /* Each logical line as a block */
+            min-height: calc(13px * 1.4); /* Ensure empty lines have height based on font-size * line-height */
+        }
+        .stdout-line { color: #9CDCFE; /* A common terminal stdout color (light blueish) */ }
+        .stderr-line { color: #F48771; /* A common terminal stderr color (light reddish) */ }
+
+
+        h2 { color: #343a40; margin-top: 0; margin-bottom: 20px; font-size: 1.3em;}
+        label { display: block; margin-bottom: 5px; font-weight: 600; color: #495057; font-size: 0.9em;}
+        input[type="text"], textarea { width: calc(100% - 22px); padding: 9px; border: 1px solid #ced4da; border-radius: 4px; font-size: 0.9em; box-sizing: border-box; margin-bottom:10px;}
+        textarea { min-height: 80px; resize: vertical; }
+        button { background-color: #007bff; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.95em; width: 100%; transition: background-color 0.2s; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #adb5bd; cursor: not-allowed; }
+
+        .log-entry { margin-bottom: 5px; padding-bottom: 5px; border-bottom: 1px dotted #eee; }
+        .log-entry:last-child { border-bottom: none; }
+        .log-entry pre { margin:0; white-space: pre-wrap; word-break: break-all; }
+
+        .status-info { color: #007bff; }
+        .status-success { color: #28a745; font-weight: bold; }
+        .status-warning { color: #856404; background-color: #fff3cd; padding:2px 5px; border-radius:3px;}
+        .status-error { color: #dc3545; font-weight: bold;}
+
+        .command-start-msg { color: #6CB6FF; font-weight: bold; margin-top: 8px; display: block; padding: 5px 0; }
+        .command-end-msg { color: #D0AFFF; margin-bottom: 8px; display: block; border-bottom: 1px dashed #3e444f; padding-bottom: 6px; padding: 5px 0; }
+
+        .thinking-text-live { white-space: pre-wrap; }
+        .final-analysis-text { margin-top: 8px; padding-top: 8px; border-top: 1px dotted #ccc; white-space: pre-wrap; }
+
+        .history-entry { margin-bottom: 12px; padding: 8px; border: 1px solid #e0e0e0; border-radius: 5px; background-color: #f9f9f9; }
+        .history-entry strong { color: #0056b3; display: block; margin-bottom: 4px; }
+        .history-entry ul { padding-left: 20px; margin: 5px 0; }
+        .history-entry li { margin-bottom: 3px; }
+        .history-entry .cmd-desc { color: #555; font-style: italic; font-size:0.9em; }
+    </style>
+</head>
+<body>
+    <div class="header"><h1>项目自动配置助手</h1></div>
+    <div class="container">
+        <div class="controls-panel">
+            <h2>控制面板</h2>
+            <div>
+                <h3>模型配置</h3>
+                <label for="systemPrompt">系统提示词:</label>
+                <textarea id="systemPrompt" rows="10">{{ current_system_prompt }}</textarea>
+                <button id="updatePromptBtn">更新提示词</button>
+            </div>
+            <div>
+                <h3>项目输入</h3>
+                <label for="gitUrl">GitHub 仓库链接:</label>
+                <input type="text" id="gitUrl" placeholder="https://github.com/用户名/仓库名.git" value="https://github.com/stlin256/AShare-AI-Stock-Picker.git">
+                <label for="envName">Conda 环境名称 (可选):</label>
+                <input type="text" id="envName" placeholder="my_project_env (留空则自动生成)">
+                <button id="startSetupBtn">开始分析与配置</button>
+            </div>
+             <div>
+                <input type="checkbox" id="showRawDebugCheckbox">
+                <label for="showRawDebugCheckbox" style="display:inline-block; font-weight:normal; margin-left:5px; vertical-align:middle;">显示LLM原始响应(调试)</label>
+            </div>
+        </div>
+
+        <div class="logs-container">
+            <div class="log-panel">
+                <h3><span role="img" aria-label="Prompt to LLM">📝</span> 发送给 LLM 的 Prompt (片段)</h3>
+                <div id="llmPromptArea" class="log-box"></div>
+            </div>
+            <div class="log-panel">
+                <h3><span role="img" aria-label="LLM Thinking">💬</span> LLM 实时分析/思考文本流</h3>
+                <div id="llmThinkingArea" class="log-box"></div>
+            </div>
+            <div class="log-panel">
+                <h3><span role="img" aria-label="History">📜</span> LLM 结构化输出历史</h3>
+                <div id="llmHistoryArea" class="log-box"></div>
+            </div>
+            <div class="log-panel" id="llmRawResponseDebugContainer" style="display:none;">
+                <h3><span role="img" aria-label="LLM Raw Response">📄</span> LLM 完整原始响应 (调试)</h3>
+                <div id="llmRawResponseDebugArea" class="log-box"></div>
+            </div>
+            <div class="log-panel">
+                <h3><span role="img" aria-label="Status Updates">📊</span> 状态与错误更新</h3>
+                <div id="statusArea" class="log-box"></div>
+            </div>
+            <div class="log-panel" style="flex-grow:1;">
+                <h3><span role="img" aria-label="Command Log">💻</span> 命令输出日志</h3>
+                <div id="outputArea" class="log-box"></div> <!-- Placeholder will be set by JS -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        const llmPromptArea = document.getElementById('llmPromptArea');
+        const llmThinkingArea = document.getElementById('llmThinkingArea');
+        const llmHistoryArea = document.getElementById('llmHistoryArea');
+        const llmRawResponseDebugContainer = document.getElementById('llmRawResponseDebugContainer');
+        const llmRawResponseDebugArea = document.getElementById('llmRawResponseDebugArea');
+        const statusArea = document.getElementById('statusArea');
+        const outputArea = document.getElementById('outputArea'); // Target for terminal output
+        const systemPromptEl = document.getElementById('systemPrompt');
+        const updatePromptBtn = document.getElementById('updatePromptBtn');
+        const gitUrlEl = document.getElementById('gitUrl');
+        const envNameEl = document.getElementById('envName');
+        const startSetupBtn = document.getElementById('startSetupBtn');
+        const showRawDebugCheckbox = document.getElementById('showRawDebugCheckbox');
+
+        const placeholders = {
+            'llmPromptArea': '等待发送 Prompt 给 LLM...',
+            'llmThinkingArea': 'LLM的中间分析和思考过程将在此流式显示...',
+            'llmHistoryArea': 'LLM的结构化指令输出历史将在此显示...',
+            'llmRawResponseDebugArea': 'LLM的原始响应将显示在这里...',
+            'statusArea': '暂无状态更新。',
+            'outputArea': '命令输出将在此显示...' // Placeholder for terminal output
+        };
+
+        function getInitialPlaceholder(elementId) {
+            return placeholders[elementId] || '';
+        }
+
+        function escapeHtml(unsafe) {
+            if (unsafe === null || unsafe === undefined) return "";
+            return unsafe.toString()
+                 .replace(/&/g, "&") // Corrected
+                 .replace(/</g, "<")  // Corrected
+                 .replace(/>/g, ">")  // Corrected
+                 .replace(/'/g, "'"); // Corrected
+        }
+
+        function setInitialPlaceholders() {
+            for (const id in placeholders) {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.innerHTML = `<div class="placeholder">${escapeHtml(getInitialPlaceholder(id))}</div>`;
+                }
+            }
+        }
+        function clearPlaceholder(areaElement) {
+            if (!areaElement) return;
+            if (areaElement.children.length === 1 && areaElement.firstElementChild && areaElement.firstElementChild.classList.contains('placeholder')) {
+                areaElement.innerHTML = '';
+            }
+        }
+
+        function addLog(areaElement, message, className = '', isHtml = false, usePre = true) {
+            if (!areaElement) return;
+            clearPlaceholder(areaElement);
+            const entry = document.createElement('div');
+            if (className) entry.className = className; // Add base class like 'log-entry' if needed, or specific
+
+            if (isHtml) { entry.innerHTML = message; } // Caller ensures HTML is safe
+            else {
+                if (usePre) { // Use <pre> for most log types to preserve formatting
+                    const pre = document.createElement('pre');
+                    pre.style.margin = '0';
+                    pre.style.whiteSpace = 'pre-wrap';
+                    pre.textContent = message; // textContent is safe
+                    entry.appendChild(pre);
+                } else { // Direct text for simpler messages
+                    entry.textContent = message; // textContent is safe
+                }
+            }
+            areaElement.appendChild(entry);
+            areaElement.scrollTop = areaElement.scrollHeight;
+        }
+
+        function disableControls(disabled) {
+            systemPromptEl.disabled = disabled; updatePromptBtn.disabled = disabled;
+            gitUrlEl.disabled = disabled; envNameEl.disabled = disabled; startSetupBtn.disabled = disabled;
+        }
+
+        showRawDebugCheckbox.addEventListener('change', function() {
+            llmRawResponseDebugContainer.style.display = this.checked ? 'flex' : 'none';
+        });
+
+        updatePromptBtn.addEventListener('click', () => {
+            const newPrompt = systemPromptEl.value.trim();
+            if (!newPrompt) { alert('系统提示词不能为空！'); return; }
+            clearPlaceholder(statusArea); addLog(statusArea, '正在更新系统提示词...', 'status-info', false, true);
+            socket.emit('update_system_prompt', { system_prompt: newPrompt });
+        });
+
+        startSetupBtn.addEventListener('click', () => {
+            const gitUrl = gitUrlEl.value.trim(); const envName = envNameEl.value.trim();
+            if (!gitUrl) { clearPlaceholder(statusArea); addLog(statusArea, 'GitHub 仓库链接不能为空！', 'status-error', false, true); alert('请输入 GitHub 仓库链接。'); return; }
+            setInitialPlaceholders();
+            clearPlaceholder(statusArea);
+            addLog(statusArea, `已请求为仓库：${escapeHtml(gitUrl)} 进行分析。环境名：${escapeHtml(envName) || '将自动生成'}`, 'status-info', false, true);
+            disableControls(true);
+            socket.emit('start_initial_setup', { git_url: gitUrl, env_name: envName });
+        });
+
+        socket.on('connect', () => { clearPlaceholder(statusArea); addLog(statusArea, '已连接到后端服务器。', 'status-success', false, true); disableControls(false); });
+        socket.on('disconnect', () => { clearPlaceholder(statusArea); addLog(statusArea, '已从后端服务器断开连接。', 'status-error', false, true); disableControls(true); });
+        socket.on('system_prompt_update', (data) => { if (data.system_prompt) { systemPromptEl.value = data.system_prompt; clearPlaceholder(statusArea); addLog(statusArea, `系统提示词已同步。`, 'status-info', false, true);}});
+
+        socket.on('status_update', (data) => {
+            clearPlaceholder(statusArea);
+            addLog(statusArea, data.message, `status-${data.type || 'info'}`, false, true);
+        });
+        socket.on('error_message', (data) => {
+            clearPlaceholder(statusArea);
+            addLog(statusArea, `错误：${data.message}`, `status-${data.type || 'error'}`, false, true);
+            disableControls(false);
+        });
+
+        socket.on('llm_prompt_sent', (data) => {
+            clearPlaceholder(llmPromptArea);
+            const promptText = data.prompt_head && data.prompt_tail ?
+                `头部:\n${data.prompt_head}\n...\n尾部:\n${data.prompt_tail}` :
+                data.prompt;
+            addLog(llmPromptArea, promptText, '', false, true);
+        });
+        socket.on('llm_raw_response_debug', (data) => {
+            clearPlaceholder(llmRawResponseDebugArea);
+            addLog(llmRawResponseDebugArea, data.raw_response, '', false, true);
+        });
+
+        let liveThinkingContentHolder = null;
+        socket.on('llm_stream_clear', (data) => {
+            llmThinkingArea.innerHTML = `<div class="placeholder">${escapeHtml(getInitialPlaceholder('llmThinkingArea'))}</div>`;
+            liveThinkingContentHolder = null;
+            if (data && data.error) {
+                clearPlaceholder(llmThinkingArea);
+                addLog(llmThinkingArea, "LLM流处理发生错误，已停止。", "status-error", false, true);
+            }
+        });
+        socket.on('llm_general_stream', (data) => {
+            clearPlaceholder(llmThinkingArea);
+            if (!liveThinkingContentHolder || !llmThinkingArea.contains(liveThinkingContentHolder)) {
+                liveThinkingContentHolder = document.createElement('div');
+                liveThinkingContentHolder.className = 'thinking-text-live'; // Ensure this class uses pre-wrap
+                llmThinkingArea.appendChild(liveThinkingContentHolder);
+            }
+            if (data.token) {
+                liveThinkingContentHolder.textContent += data.token;
+                llmThinkingArea.scrollTop = llmThinkingArea.scrollHeight;
+            }
+        });
+        socket.on('llm_final_analysis_text', (data) => { /* ... as before ... */
+            clearPlaceholder(llmThinkingArea); const summaryEntry = document.createElement('div'); summaryEntry.className = 'final-analysis-text'; const pre = document.createElement('pre'); pre.style.margin = '0'; pre.style.whiteSpace = 'pre-wrap'; pre.textContent = data.text; summaryEntry.appendChild(pre); if(liveThinkingContentHolder && llmThinkingArea.contains(liveThinkingContentHolder)){ llmThinkingArea.appendChild(summaryEntry); } else { llmThinkingArea.innerHTML = ''; llmThinkingArea.appendChild(summaryEntry); } llmThinkingArea.scrollTop = llmThinkingArea.scrollHeight; liveThinkingContentHolder = null;
+        });
+
+        socket.on('clear_history_display', () => { setInitialPlaceholders(); });
+        socket.on('llm_structured_output_history', (data) => { /* ... as before ... */
+            clearPlaceholder(llmHistoryArea); const output = data.output; const entryDiv = document.createElement('div'); entryDiv.className = 'history-entry'; let contentHtml = `<strong>LLM指令 (${new Date().toLocaleTimeString()})</strong>`; if (output.thought_summary) { contentHtml += `<p><strong>总结:</strong> ${escapeHtml(output.thought_summary).replace(/\n/g, '<br>')}</p>`; } if (output.files_to_read && output.files_to_read.length > 0) { contentHtml += `<p><strong>请求读取文件:</strong><ul>`; output.files_to_read.forEach(file => { contentHtml += `<li>${escapeHtml(file)}</li>`; }); contentHtml += `</ul></p>`; } if (output.commands_to_execute && output.commands_to_execute.length > 0) { contentHtml += `<p><strong>计划执行命令:</strong><ul>`; output.commands_to_execute.forEach(cmdObj => { contentHtml += `<li><code>${escapeHtml(cmdObj.command_line)}</code><br><span class="cmd-desc">${escapeHtml(cmdObj.description)}</span></li>`; }); contentHtml += `</ul></p>`; } if (!output.thought_summary && (!output.files_to_read || output.files_to_read.length === 0) && (!output.commands_to_execute || output.commands_to_execute.length === 0)) { contentHtml += "<p><i>(LLM未提供明确的下一步行动或总结)</i></p>"; } entryDiv.innerHTML = contentHtml; llmHistoryArea.appendChild(entryDiv); llmHistoryArea.scrollTop = llmHistoryArea.scrollHeight;
+        });
+
+        // --- ROBUST command_stream HANDLER ---
+        let currentActiveCommandOutputDiv = null; // Holds the <div> for the current logical line being outputted
+        let lineBuffer = ""; // Accumulates text for the current logical line
+
+        function createNewLineDiv(streamTypeClass) {
+            const div = document.createElement('div');
+            div.className = 'command-output-line ' + streamTypeClass;
+            outputArea.appendChild(div);
+            return div;
+        }
+
+        socket.on('command_stream', (data) => {
+            const autoScroll = outputArea.scrollHeight - outputArea.clientHeight <= outputArea.scrollTop + 20; // Check before adding content
+            clearPlaceholder(outputArea); // Clear placeholder if it's the first output for this area
+
+            if (data.type === 'command_start') {
+                currentActiveCommandOutputDiv = null; // Reset for new command
+                lineBuffer = "";
+                const startMsgDiv = document.createElement('div');
+                startMsgDiv.className = 'command-start-msg';
+                startMsgDiv.textContent = `>>> ${escapeHtml(data.command)}`;
+                outputArea.appendChild(startMsgDiv);
+            } else if (data.type === 'stdout_chunk' || data.type === 'stderr_chunk') {
+                const streamClass = data.type === 'stdout_chunk' ? 'stdout-line' : 'stderr-line';
+
+                if (!currentActiveCommandOutputDiv) { // If no current line div, create one
+                    currentActiveCommandOutputDiv = createNewLineDiv(streamClass);
+                    lineBuffer = ""; // Ensure buffer is reset for new div
+                } else {
+                    // Ensure class is correct if stream type switched mid-line (less common but possible)
+                    if (streamClass === 'stdout-line' && !currentActiveCommandOutputDiv.classList.contains('stdout-line')) {
+                        currentActiveCommandOutputDiv.classList.remove('stderr-line');
+                        currentActiveCommandOutputDiv.classList.add('stdout-line');
+                    } else if (streamClass === 'stderr-line' && !currentActiveCommandOutputDiv.classList.contains('stderr-line')) {
+                        currentActiveCommandOutputDiv.classList.remove('stdout-line');
+                        currentActiveCommandOutputDiv.classList.add('stderr-line');
+                    }
+                }
+
+                let chunk = data.chunk;
+                for (let i = 0; i < chunk.length; i++) {
+                    const char = chunk[i];
+                    if (char === '\r') {
+                        lineBuffer = ""; // Clear buffer for line overwrite
+                    } else if (char === '\n') {
+                        currentActiveCommandOutputDiv.textContent = lineBuffer; // Output buffered line
+                        lineBuffer = ""; // Reset buffer
+                        currentActiveCommandOutputDiv = null; // Nullify to create new div for next line
+                        if (i < chunk.length - 1) { // If more chars in chunk after \n
+                            currentActiveCommandOutputDiv = createNewLineDiv(streamClass); // Create it now
+                        }
+                    } else {
+                        lineBuffer += char; // Append char to buffer
+                    }
+                }
+                // After loop, if there's a current line div, update it with the buffer
+                if (currentActiveCommandOutputDiv) {
+                    currentActiveCommandOutputDiv.textContent = lineBuffer;
+                }
+
+            } else if (data.type === 'command_end') {
+                // Finalize any buffered text for the last line
+                if (currentActiveCommandOutputDiv && lineBuffer) {
+                    currentActiveCommandOutputDiv.textContent = lineBuffer;
+                }
+                currentActiveCommandOutputDiv = null;
+                lineBuffer = "";
+
+                const endMsgDiv = document.createElement('div');
+                endMsgDiv.className = 'command-end-msg';
+                let endMsgText = `<<< 命令执行完毕 (RC: ${data.return_code !== undefined ? data.return_code : 'N/A'})`;
+                // No need to add data.command here, it's less common for end message in terminals
+                endMsgDiv.textContent = endMsgText;
+                if (data.return_code === 0) { endMsgDiv.style.color = '#90EE90'; } // LightGreen
+                else { endMsgDiv.style.color = '#FF7F7F'; } // LightCoral
+                outputArea.appendChild(endMsgDiv);
+                // Add a visual separator after command completion for better readability
+                const hr = document.createElement('hr');
+                hr.style.borderColor = '#3e444f'; // Darker hr for dark background
+                outputArea.appendChild(hr);
+            }
+
+            if (autoScroll) {
+                outputArea.scrollTop = outputArea.scrollHeight;
+            }
+        });
+        // --- END OF ROBUST command_stream HANDLER ---
+
+        socket.on('setup_complete', (data) => {
+             clearPlaceholder(statusArea);
+             const message = `后端标记配置流程已全部结束。环境名：${escapeHtml(data.env_name)}。项目路径：${escapeHtml(data.project_path)}`;
+             addLog(statusArea, message, 'status-success', false, true);
+             alert(`配置流程已全部结束：${escapeHtml(data.env_name)}。\n请检查所有日志了解详细信息。`);
+             disableControls(false);
+        });
+
+        document.addEventListener('DOMContentLoaded', (event) => {
+            setInitialPlaceholders();
+            disableControls(false);
+            llmRawResponseDebugContainer.style.display = showRawDebugCheckbox.checked ? 'flex' : 'none';
+        });
+    </script>
+</body>
+</html>
