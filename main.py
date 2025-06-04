@@ -9,7 +9,6 @@ import json
 import re
 import subprocess
 from typing import Optional, List, Dict, Any, Tuple, Union
-import errno
 
 try:
     import llm
