@@ -419,6 +419,95 @@ def scan_directory(directory_path: str, max_depth: int = -1) -> Dict[str, Any]:
         return {"error": f"扫描目录时发生错误: {e}"}
 
 
+def write_file_content(
+        filepath_relative: str,
+        content_to_write: str,
+        working_directory: Optional[str] = None,
+        overwrite: bool = True
+) -> Dict[str, Any]:
+    """
+    Writes the given content to a specified file.
+
+    Args:
+        filepath_relative: Relative path to the file from the working_directory.
+        content_to_write: The string content to write to the file.
+        working_directory: The base directory. If None, uses os.getcwd().
+        overwrite: If True, overwrites the file if it exists.
+                   If False and file exists, returns an error. (Currently always True for LLM simplicity)
+
+    Returns:
+        A dictionary убийств result status, similar to command execution results.
+    """
+    if working_directory is None:
+        working_directory = os.getcwd()
+
+    if not filepath_relative or ".." in filepath_relative or os.path.isabs(filepath_relative):
+        return {
+            "operation": "write_file",
+            "filepath": filepath_relative,
+            "success": False,
+            "message": "错误：文件路径无效或包含禁止的 '..' 或绝对路径。",
+            "content_length_written": 0
+        }
+
+    full_path = os.path.normpath(os.path.join(working_directory, filepath_relative))
+
+    # Security check: Ensure the path is within the working directory
+    norm_full_path = os.path.normcase(full_path)
+    norm_working_dir = os.path.normcase(os.path.abspath(working_directory))
+
+    if not (norm_full_path.startswith(norm_working_dir + os.sep) or norm_full_path == norm_working_dir):
+        # Allow writing to the root of the working directory itself, but not outside
+        if os.path.dirname(norm_full_path) != norm_working_dir and not norm_full_path.startswith(
+                norm_working_dir + os.sep):
+            return {
+                "operation": "write_file",
+                "filepath": filepath_relative,
+                "success": False,
+                "message": f"错误：写入路径 '{filepath_relative}' (解析为 '{full_path}') 超出允许的工作目录范围 ('{working_directory}')。",
+                "content_length_written": 0
+            }
+
+    try:
+        # Ensure parent directory exists
+        parent_dir = os.path.dirname(full_path)
+        if parent_dir and not os.path.exists(parent_dir):
+            os.makedirs(parent_dir, exist_ok=True)
+            print(f"[INFO] Created directory for file write: {parent_dir}")
+
+        # For LLM simplicity, always overwrite for now.
+        # If you need 'append' or 'no-overwrite' options, they can be added.
+        mode = 'w'  # 'w' for write (overwrite or create), 'a' for append
+
+        # if not overwrite and os.path.exists(full_path):
+        #     return {
+        #         "operation": "write_file",
+        #         "filepath": filepath_relative,
+        #         "success": False,
+        #         "message": f"错误：文件 '{filepath_relative}' 已存在且禁止覆盖。",
+        #         "content_length_written": 0
+        #     }
+
+        with open(full_path, mode, encoding='utf-8') as f:
+            bytes_written = f.write(content_to_write)
+
+        return {
+            "operation": "write_file",
+            "filepath": filepath_relative,
+            "full_path_written": full_path,
+            "success": True,
+            "message": f"文件 '{filepath_relative}' 成功写入 ({bytes_written} 字符)。",
+            "content_length_written": len(content_to_write)  # Number of characters
+        }
+    except Exception as e:
+        return {
+            "operation": "write_file",
+            "filepath": filepath_relative,
+            "success": False,
+            "message": f"写入文件 '{filepath_relative}' 时发生错误: {e}",
+            "content_length_written": 0
+        }
+
 if __name__ == '__main__':
     print("Command Executor (Strict PyTerm Conda Logic V4 - fcntl fix) - Direct Test Mode")
     test_commands = [

@@ -12,7 +12,7 @@ from typing import Optional, List, Dict, Any, Tuple, Union
 
 try:
     import llm
-    import command_executor as executor
+    import command_executor as executor  # 假设 command_executor.py 已经添加了 write_file_content 函数
 except ImportError as e:
     print(f"错误：导入模块失败 - {e}")
     print("请确保 llm.py 和 command_executor.py 文件位于同一目录下。")
@@ -49,7 +49,18 @@ DEFAULT_SYSTEM_PROMPT_TEMPLATE = (
     "    }"
     "\n    // ... (更多命令对象) ... "
     "\n  ]\n"
-    "}\n"
+    "}\n"  # 您提供的代码中这里缺少一个逗号，如果 files_to_write 在此之后
+    "  \"files_to_write\": [ (对象数组, 可选) "  # 假设您已在提示中正确添加了此部分
+    "\n    // 每个对象代表一个要写入或创建的文件。"
+    "\n    // 如果本轮指定了`files_to_read`或`commands_to_execute`，此字段通常应为空或省略，除非你明确希望在执行命令或读取文件之前/之后写入文件（通常不推荐混合）。"
+    "\n    // 如果没有文件要写入，则此键可省略或设置为空数组 `[]`。"
+    "\n    {"
+    "\n      \"path\": \"(字符串, 必需) 相对于<PROJECT_ROOT_PATH_PLACEHOLDER>的文件路径。例如 'src/config.json' 或 'requirements-dev.txt'。\",\n"
+    "\n      \"content\": \"(字符串, 必需) 要写入文件的完整文本内容。\",\n"
+    "\n      \"description\": \"(字符串, 可选, 中文) 对写入该文件目的的简短中文描述。\"\n"
+    "\n    }"
+    "\n    // ... (更多文件写入对象) ... "
+    "\n  ],\n"  # 确保这里有逗号，如果后面还有字段
     "\n\n--- 命令生成指南 (Windows - 至关重要，必须严格遵守) ---"
     "\n1. **工作目录**: 所有需要访问项目文件的命令 (如 `pip install -r requirements.txt`, `python your_script.py`) 都将自动在上面“当前任务状态”中指定的 `<PROJECT_ROOT_PATH_PLACEHOLDER>` 下执行。你可以使用cd指令改变工作文件夹。"
     "\n2. **Conda环境**: "
@@ -58,17 +69,18 @@ DEFAULT_SYSTEM_PROMPT_TEMPLATE = (
     "\n   - **禁止**: 绝对禁止生成 `conda activate` 或 `source activate` 命令。在 `conda run` 中也绝对禁止使用 `--cwd`。"
     "\n3. **Pip**: 在Conda环境中使用pip时，必须通过 `conda run -n <ENV_NAME_PLACEHOLDER> python -m pip ...` 调用。"
     "\n4. **通用命令**: 你可以使用 `dir`, `tree /F` (查看目录结构), `curl` (下载文件)。你还可以使用命令来修改文件内容，或者创建文件副本。"
+    # 假设您已在此处添加了关于 files_to_write 的指南
     "\n\n--- 交互流程与输出示例 (你的输出应仅为花括号内的JSON内容) ---"
     "\n**示例1: 初始分析，LLM决定先读取文件 (当前任务状态: 目标环境名 'proj_env', 项目根目录 'C:\\cloned\\my_proj', README提取信息 '见下文')**"
     "\n{\n"
-    "  \"thought_summary\": \"项目已克隆。根据从README中提取的关键信息，项目似乎需要特定版本的库，且依赖可能在 'requirements.txt'。我将请求读取 'requirements.txt'。如果提取的README信息不明确或不足，我会考虑请求读取完整的README文件。\",\n"  # 修改示例
+    "  \"thought_summary\": \"项目已克隆。根据从README中提取的关键信息，项目似乎需要特定版本的库，且依赖可能在 'requirements.txt'。我将请求读取 'requirements.txt'。如果提取的README信息不明确或不足，我会考虑请求读取完整的README文件。\",\n"
     "  \"files_to_read\": [\"requirements.txt\"],\n"
     "  \"commands_to_execute\": []\n"
     "}\n"
     "\n**(系统将读取文件，并将内容连同历史反馈给你。下一轮，“当前任务状态”中的项目根目录和环境名会保持，README提取信息也会持续提供。)**\n"
     "\n**示例2: LLM收到文件内容后，决定创建环境并执行命令 (当前任务状态: 目标环境名 'proj_env', 项目根目录 'C:\\cloned\\my_proj', README提取信息 '...')**"
     "\n{\n"
-    "  \"thought_summary\": \"已收到 'requirements.txt' 内容。根据此信息和从README提取的关键信息，以及系统提示中指定的当前目标环境名称 'proj_env'，我将创建Conda环境并安装依赖。\",\n"  # 修改示例
+    "  \"thought_summary\": \"已收到 'requirements.txt' 内容。根据此信息和从README提取的关键信息，以及系统提示中指定的当前目标环境名称 'proj_env'，我将创建Conda环境并安装依赖。\",\n"
     "  \"files_to_read\": [],\n"
     "  \"commands_to_execute\": [\n"
     "    {\"command_line\": \"conda create -n proj_env python=3.10 -y\", \"description\": \"创建Conda环境 proj_env (Python 3.10)\"},\n"
@@ -170,57 +182,39 @@ def extract_readme_info_with_llm(sid: str, readme_full_content: str, readme_file
     llm_client.system_prompt_content = README_EXTRACTION_SYSTEM_PROMPT  # 临时切换系统提示
 
     accumulated_extraction_text = ""
-    # README提取不使用流式输出到前端，直接获取完整结果
     try:
-        # 注意：这里的get_response_stream调用可能需要调整，如果它依赖于外部的流式处理逻辑
-        # 为简单起见，我们假设它能正常工作并返回完整文本，或者你需要一个非流式的方法
-        # 如果llm_client.get_response_stream必须流式，我们需要累积它
-        temp_conv_hist_for_extraction = []  # 提取任务不使用主对话历史
-
-        # 模拟一个简单的非流式调用，或者适应你的LLMClient
-        # 如果你的LLMClient有一个简单调用方法，优先使用那个
-        # 否则，如下累积流式输出：
-        # 这里的max_tokens应该设置得足够大以容纳JSON输出，但也要合理
+        temp_conv_hist_for_extraction = []
         for event_type, content_chunk in llm_client.get_response_stream(
-                extraction_prompt, max_tokens=MAX_LLM_OUTPUT_TOKENS // 2, temperature=0.0):  # 低温以求精确
+                extraction_prompt, max_tokens=MAX_LLM_OUTPUT_TOKENS // 2, temperature=0.0):
             if event_type == "delta_content" and content_chunk is not None:
                 accumulated_extraction_text += content_chunk
             elif event_type == "error":
                 raise Exception(f"LLM提取响应错误: {content_chunk}")
             elif event_type == "stream_end":
                 break
-
         if not accumulated_extraction_text.strip():
             raise Exception("LLM提取返回为空。")
-
     except Exception as e:
         error_msg = f"使用LLM提取 '{readme_filename}' 信息时发生错误: {e}"
         socketio.emit('error_message', {'message': error_msg, 'type': 'error'}, room=sid, namespace='/')
-        llm_client.system_prompt_content = original_system_prompt  # 恢复原始系统提示
+        llm_client.system_prompt_content = original_system_prompt
         return json.dumps({"error": str(e), "extraction_summary": f"提取过程中发生错误: {e}"})
     finally:
-        llm_client.system_prompt_content = original_system_prompt  # 确保恢复
+        llm_client.system_prompt_content = original_system_prompt
 
-    # 尝试解析提取的JSON
     extracted_json_str = extract_json_from_llm_response(accumulated_extraction_text)
     if extracted_json_str:
         try:
-            # 验证是否是有效的JSON，如果不是，则将其作为文本处理
-            json.loads(extracted_json_str)  # Just to validate
+            json.loads(extracted_json_str)
             socketio.emit('status_update', {'message': f"成功从 '{readme_filename}' 提取结构化信息。", 'type': 'info'},
                           room=sid, namespace='/')
-            # 将提取的JSON字符串直接返回
-            # 后续会在 build_llm_input_for_client 中替换 <README_CONTENT_PLACEHOLDER>
-            # 注意：这里返回的是一个JSON字符串，而不是Python字典
             return extracted_json_str
         except json.JSONDecodeError:
             summary_msg = f"LLM声称提取了JSON，但解析失败。将原始内容作为文本摘要。"
             socketio.emit('status_update',
                           {'message': f"警告：LLM为 '{readme_filename}' 返回的JSON解析失败。将使用原始文本。",
                            'type': 'warning'}, room=sid, namespace='/')
-            # 如果解析失败，但有内容，则返回一个包含错误和原始内容的JSON结构
-            # 限制长度，以防LLM返回了整个README或其他长文本
-            max_fallback_len = 20000#min(MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT // 8, 20000)
+            max_fallback_len = 20000  # min(MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT // 8, 20000)
             fallback_content = accumulated_extraction_text[:max_fallback_len]
             if len(accumulated_extraction_text) > max_fallback_len:
                 fallback_content += "\n...(内容过长已截断)..."
@@ -234,7 +228,7 @@ def extract_readme_info_with_llm(sid: str, readme_full_content: str, readme_file
         socketio.emit('status_update',
                       {'message': f"警告：未能从 '{readme_filename}' 的LLM响应中提取JSON。", 'type': 'warning'}, room=sid,
                       namespace='/')
-        max_fallback_len = 20000#min(MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT // 8, 2000)
+        max_fallback_len = 20000  # min(MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT // 8, 20000)
         fallback_content = accumulated_extraction_text[:max_fallback_len]
         if len(accumulated_extraction_text) > max_fallback_len:
             fallback_content += "\n...(内容过长已截断)..."
@@ -249,7 +243,7 @@ def build_llm_input_for_client(
         current_user_query_segment: str,
         project_root_for_system_prompt: str,
         env_name_for_system_prompt: str,
-        readme_summary_for_system_prompt: Optional[str]  # 现在这里是提取的JSON字符串或错误信息
+        readme_summary_for_system_prompt: Optional[str]
 ) -> Tuple[str, str]:
     global conversation_history
 
@@ -265,18 +259,13 @@ def build_llm_input_for_client(
     final_system_prompt = final_system_prompt.replace("<ENV_NAME_PLACEHOLDER>",
                                                       env_name_for_system_prompt or "当前未设置或未知")
 
-    # readme_summary_for_system_prompt 现在是JSON字符串形式的提取信息
-    # 我们需要确保它被正确地格式化以便阅读
     readme_placeholder_content = "未提供或未成功提取README信息。"
     if readme_summary_for_system_prompt:
         try:
-            # 尝试美化JSON以便LLM阅读，如果它确实是JSON的话
             parsed_readme_json = json.loads(readme_summary_for_system_prompt)
             readme_placeholder_content = f"```json\n{json.dumps(parsed_readme_json, indent=2, ensure_ascii=False)}\n```"
         except json.JSONDecodeError:
-            # 如果不是有效的JSON（例如，提取失败返回了错误信息），则按原样插入
-            # 并确保它不会太长
-            max_len_fallback_readme = 20000#min(MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT // 7, 20000)
+            max_len_fallback_readme = 20000  # min(MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT // 7, 20000)
             if len(readme_summary_for_system_prompt) > max_len_fallback_readme:
                 readme_placeholder_content = readme_summary_for_system_prompt[
                                              :max_len_fallback_readme] + "\n...(README提取内容过长已截断)..."
@@ -299,6 +288,17 @@ def build_llm_input_for_client(
         if budget_for_history_accumulator < 0:
             print(
                 f"[CRITICAL WARNING] SID {request.sid if request else 'N/A'}: 系统提示和当前查询已超限 ({len_sys_prompt + len_current_query_block} > {MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT}).")
+            if len_sys_prompt + len(
+                    CURRENT_QUERY_INTRO_TEXT) < MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT:  # 尝试截断current_user_query_segment
+                max_len_current_query_segment = MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT - len_sys_prompt - len(
+                    CURRENT_QUERY_INTRO_TEXT) - 10  # 10 for safety
+                if max_len_current_query_segment > 0 and len(
+                        current_user_query_segment) > max_len_current_query_segment:
+                    current_user_query_segment = current_user_query_segment[
+                                                 :max_len_current_query_segment] + "\n...(当前指令过长，已被截断)...\n"
+                    current_query_block_str = CURRENT_QUERY_INTRO_TEXT + current_user_query_segment
+            else:  # 连系统提示都放不下了，或者没有空间给当前指令
+                current_query_block_str = CURRENT_QUERY_INTRO_TEXT + "\n...(当前指令过长，且无足够空间显示，已被严重截断)...\n"
             return final_system_prompt, current_query_block_str
 
     notice_lengths = [len(TRUNCATION_MESSAGE_OTHER), len(TRUNCATION_MESSAGE_CRITICAL), len(NO_HISTORY_MESSAGE)]
@@ -340,13 +340,25 @@ def build_llm_input_for_client(
                 summary = content.get('thought_summary', '(无总结)')
                 files_req = content.get('files_to_read', [])
                 cmds_req = content.get('commands_to_execute', [])
+                files_write_req = content.get('files_to_write', [])  # +++ Added for history +++
                 entry_str = f"\n[你之前的JSON响应 (当时目标环境: '{env_name_hist}')]:\n  思考总结: {summary}\n"
                 if files_req: entry_str += f"  请求读取文件: {files_req}\n"
+                if files_write_req: entry_str += f"  请求写入文件: {[fw.get('path', 'N/A') for fw in files_write_req if isinstance(fw, dict)]}\n"  # +++ Added for history +++
                 if cmds_req: entry_str += f"  请求执行命令: {[c.get('command_line', 'N/A') for c in cmds_req if isinstance(c, dict)]}\n"
             elif entry_type == "llm_raw_unparsable_output" and isinstance(content, str):
                 raw_output_snippet = content[:2000]  # 保持不变
                 if len(content) > 2000: raw_output_snippet += "\n...(原始输出过长已截断)...\n"
                 entry_str = f"\n[你先前未解析的原始输出 (这通常表示格式错误)]:\n```text\n{raw_output_snippet}\n```\n"
+            # +++ START OF NEW CODE for file_write_result history +++
+            elif entry_type == "file_write_result" and isinstance(content, dict):
+                filepath = content.get('filepath', 'N/A')
+                success = content.get('success', False)
+                message = content.get('message', '无消息')
+                entry_str = (f"\n[上一个系统操作结果 - 文件写入]:\n"
+                             f"  文件路径: `{filepath}`\n"
+                             f"  操作状态: {'成功' if success else '失败'}\n"
+                             f"  详细信息: {message}\n")
+            # +++ END OF NEW CODE for file_write_result history +++
 
             if entry_str:
                 if entry_type == "llm_structured_output":
@@ -489,8 +501,8 @@ def read_project_files(sid: str, project_root: str, relative_paths: List[str]) -
     global project_file_cache
     contents: Dict[str, str] = {};
 
-    max_file_size_chars = 20000#min(MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT // 10, 20000)  # 保持不变
-    total_chars_limit_this_call = 20000#min(MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT // 5, 12000)  # 保持不变
+    max_file_size_chars = 20000  # min(MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT // 10, 20000)  # 保持不变
+    total_chars_limit_this_call = 20000  # min(MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT // 5, 12000)  # 保持不变
     current_read_chars_this_call = 0
 
     for rel_path_raw in relative_paths:
@@ -518,57 +530,64 @@ def read_project_files(sid: str, project_root: str, relative_paths: List[str]) -
             pass
         elif rel_path in project_file_cache:
             cached_content = project_file_cache[rel_path]
-            if 1:#current_read_chars_this_call + len(cached_content) <= total_chars_limit_this_call:
+            if 1:  # current_read_chars_this_call + len(cached_content) <= total_chars_limit_this_call: # 根据您的要求，注释掉长度限制
                 contents[rel_path_raw] = cached_content
                 current_read_chars_this_call += len(cached_content)
                 socketio.emit('status_update',
                               {'message': f"从缓存中获取文件 '{rel_path_raw}' ({len(cached_content)} chars)。",
                                'type': 'info'}, room=sid, namespace='/')
                 continue
-            else:
-                msg = f"从缓存读取文件 '{rel_path_raw}' 将超出本次调用总字符数限制，已跳过。"
-                socketio.emit('status_update', {'message': msg, 'type': 'warning'}, room=sid, namespace='/')
-                contents[rel_path_raw] = "[错误：超出本次文件读取总字符数限制 (来自缓存)，未加载]"
-                continue
+            # else: # 这部分逻辑现在不会执行
+            #     msg = f"从缓存读取文件 '{rel_path_raw}' 将超出本次调用总字符数限制，已跳过。"
+            #     socketio.emit('status_update', {'message': msg, 'type': 'warning'}, room=sid, namespace='/')
+            #     contents[rel_path_raw] = "[错误：超出本次文件读取总字符数限制 (来自缓存)，未加载]"
+            #     continue
         try:
             if os.path.exists(abs_path) and os.path.isfile(abs_path):
                 file_size_bytes = os.path.getsize(abs_path)
-                if file_size_bytes > max_file_size_chars * 4:
-                    msg = f"文件 '{rel_path_raw}' 初步判断过大 ({file_size_bytes}字节)，已跳过。"
-                    socketio.emit('status_update', {'message': msg, 'type': 'warning'}, room=sid, namespace='/')
-                    contents[rel_path_raw] = f"[错误：文件过大 ({file_size_bytes}B)，已跳过读取]"
-                    project_file_cache[rel_path] = contents[rel_path_raw]
-                    continue
-
+                # 根据您的要求，注释掉初步大小判断，但保留一个非常大的安全上限防止内存问题
+                # if file_size_bytes > max_file_size_chars * 4:
+                #     msg = f"文件 '{rel_path_raw}' 初步判断过大 ({file_size_bytes}字节)，已跳过。"
+                #     socketio.emit('status_update', {'message': msg, 'type': 'warning'}, room=sid, namespace='/')
+                #     contents[rel_path_raw] = f"[错误：文件过大 ({file_size_bytes}B)，已跳过读取]"
+                #     project_file_cache[rel_path] = contents[rel_path_raw]
+                #     continue
+                very_large_file_safety_limit_chars = 500000  # 安全上限
                 with open(abs_path, 'r', encoding='utf-8', errors='replace') as f:
-                    content = f.read(max_file_size_chars + 1)
+                    content = f.read(very_large_file_safety_limit_chars + 1)  # 读取，带安全检查
 
-                if len(content) > max_file_size_chars:
-                    content = content[:max_file_size_chars]
-                    msg = f"文件 '{rel_path_raw}' 内容过大 (超过 {max_file_size_chars} 字符)，已截断。"
+                if len(content) > very_large_file_safety_limit_chars:  # 如果文件真的超级大
+                    content = content[:very_large_file_safety_limit_chars]
+                    msg = f"文件 '{rel_path_raw}' 内容极大 (超过 {very_large_file_safety_limit_chars} 字符)，已截断以保护内存。将尝试送入LLM。"
                     socketio.emit('status_update', {'message': msg, 'type': 'warning'}, room=sid, namespace='/')
 
-                if current_read_chars_this_call + len(content) > total_chars_limit_this_call:
-                    remaining_budget_for_file = total_chars_limit_this_call - current_read_chars_this_call
-                    if remaining_budget_for_file > 0:
-                        content = content[:remaining_budget_for_file]
-                        msg = f"读取文件 '{rel_path_raw}' 内容后超出总字符数限制，已截断以适应剩余空间。"
-                        socketio.emit('status_update', {'message': msg, 'type': 'warning'}, room=sid, namespace='/')
-                    else:
-                        msg = f"读取文件 '{rel_path_raw}' 因超出总字符数限制，未加载。"
-                        socketio.emit('status_update', {'message': msg, 'type': 'warning'}, room=sid, namespace='/')
-                        contents[rel_path_raw] = "[错误：超出本次文件读取总字符数限制，未加载]"
-                        break
+                # 根据您的要求，注释掉这里的 max_file_size_chars 和 total_chars_limit_this_call 截断逻辑
+                # if len(content) > max_file_size_chars:
+                #     content = content[:max_file_size_chars]
+                #     msg = f"文件 '{rel_path_raw}' 内容过大 (超过 {max_file_size_chars} 字符)，已截断。"
+                #     socketio.emit('status_update', {'message': msg, 'type': 'warning'}, room=sid, namespace='/')
+
+                # if current_read_chars_this_call + len(content) > total_chars_limit_this_call:
+                #     remaining_budget_for_file = total_chars_limit_this_call - current_read_chars_this_call
+                #     if remaining_budget_for_file > 0:
+                #         content = content[:remaining_budget_for_file]
+                #         msg = f"读取文件 '{rel_path_raw}' 内容后超出总字符数限制，已截断以适应剩余空间。"
+                #         socketio.emit('status_update', {'message': msg, 'type': 'warning'}, room=sid, namespace='/')
+                #     else:
+                #         msg = f"读取文件 '{rel_path_raw}' 因超出总字符数限制，未加载。"
+                #         socketio.emit('status_update', {'message': msg, 'type': 'warning'}, room=sid, namespace='/')
+                #         contents[rel_path_raw] = "[错误：超出本次文件读取总字符数限制，未加载]"
+                #         break
 
                 if content and (rel_path_raw not in contents or not contents[rel_path_raw].startswith("[错误：")):
                     contents[rel_path_raw] = content
-                    project_file_cache[rel_path] = content  # 缓存的是可能被截断后的内容
-                    current_read_chars_this_call += len(content)
+                    project_file_cache[rel_path] = content
+                    current_read_chars_this_call += len(content)  # 仍然追踪，但不再基于它做截断
                     socketio.emit('status_update',
-                                  {'message': f"已读取文件 '{rel_path_raw}' (大小: {len(content)}字符)。",
+                                  {'message': f"已读取文件 '{rel_path_raw}' (大小: {len(content)}字符)。",  # 不再提示“可能已截断”
                                    'type': 'info'}, room=sid, namespace='/')
                 elif not (rel_path_raw in contents):
-                    contents[rel_path_raw] = "[错误：文件内容截断后为空或读取问题]"
+                    contents[rel_path_raw] = "[错误：文件内容为空或读取问题]"  # 修改了这里的错误信息
             else:
                 msg = f"LLM请求的文件 '{rel_path_raw}' (解析为 '{abs_path}') 不存在或不是一个文件。"
                 socketio.emit('status_update', {'message': msg, 'type': 'warning'}, room=sid, namespace='/')
@@ -608,7 +627,7 @@ def handle_update_system_prompt(data: Dict[str, str]):
         socketio.emit('error_message', {'message': "系统提示词不能为空。", 'type': 'error'}, room=sid, namespace='/')
         return
     DEFAULT_SYSTEM_PROMPT_TEMPLATE = new_prompt_template
-    if initialize_llm_client(DEFAULT_SYSTEM_PROMPT_TEMPLATE, sid=sid):  # Re-init with new default
+    if initialize_llm_client(DEFAULT_SYSTEM_PROMPT_TEMPLATE, sid=sid):
         socketio.emit('status_update', {'message': f"系统提示词模板已更新。对话历史已重置。", 'type': 'success'},
                       room=sid, namespace='/')
         socketio.emit('system_prompt_update', {'system_prompt': DEFAULT_SYSTEM_PROMPT_TEMPLATE}, room=sid,
@@ -642,9 +661,8 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
         if not project_name_for_dir: project_name_for_dir = "cloned_project_default_name"
 
         project_cloned_root_path = step_data.get('project_cloned_root_path')
-        initial_readme_name = step_data.get('initial_readme_name')  # This is the *filename* of the README
+        initial_readme_name = step_data.get('initial_readme_name')
 
-        # current_readme_summary now holds the *extracted* JSON string or error string
         current_readme_summary = step_data.get('readme_summary_for_llm', initial_readme_summary_for_llm)
         current_user_query_segment = ""
 
@@ -694,7 +712,7 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
                                                          working_dir=project_cloned_root_path)
             if dir_execution_result.get('return_code', -1) == 0:
                 raw_dir_stdout = dir_execution_result.get('stdout', "").strip()
-                max_len_for_dir_output_in_query = 6000#min(MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT // 5, 6000)  # 保持不变
+                max_len_for_dir_output_in_query = 6000  # min(MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT // 5, 6000)
                 if len(raw_dir_stdout) > max_len_for_dir_output_in_query:
                     dir_listing_content = raw_dir_stdout[
                                           :max_len_for_dir_output_in_query] + f"\n... (目录列表过长，此处显示前 {max_len_for_dir_output_in_query} 字符)"
@@ -710,12 +728,10 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
                 socketio.emit('status_update', {'message': f"获取项目根目录文件列表失败.", 'type': 'warning'}, room=sid,
                               namespace='/')
 
-            # --- README Handling: Read full, then extract with LLM ---
             readme_extracted_info_json_str = json.dumps({"error": "README not found or read error.",
-                                                         "extraction_summary": "未找到README文件或读取时发生错误。"})  # Default
+                                                         "extraction_summary": "未找到README文件或读取时发生错误。"})
             full_readme_content_from_file = ""
             readme_filename_found = None
-
             possible_readme_files = ["README.md", "readme.md", "README.rst", "README.txt", "README", "ReadMe.md"]
             for name in possible_readme_files:
                 p = os.path.join(project_cloned_root_path, name)
@@ -723,9 +739,9 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
                     try:
                         with open(p, 'r', encoding='utf-8', errors='replace') as f:
                             full_readme_content_from_file = f.read()
-                        project_file_cache[name] = full_readme_content_from_file  # Cache the full original content
+                        project_file_cache[name] = full_readme_content_from_file
                         readme_filename_found = name
-                        step_data['initial_readme_name'] = name  # Store the filename
+                        step_data['initial_readme_name'] = name
                         socketio.emit('status_update', {
                             'message': f"README文件 '{name}' 已找到并读取全文 ({len(full_readme_content_from_file)} chars)。",
                             'type': 'info'}, room=sid, namespace='/')
@@ -737,29 +753,23 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
                         readme_extracted_info_json_str = json.dumps(
                             {"error": read_error_msg, "extraction_summary": f"读取 {name} 出错。"})
                         break
-
             if readme_filename_found and full_readme_content_from_file:
-                # Now, use LLM to extract info from full_readme_content_from_file
                 readme_extracted_info_json_str = extract_readme_info_with_llm(sid, full_readme_content_from_file,
                                                                               readme_filename_found)
             elif not readme_filename_found:
                 socketio.emit('status_update', {'message': "未在项目中找到常见的README文件名。", 'type': 'warning'},
                               room=sid, namespace='/')
 
-            initial_readme_summary_for_llm = readme_extracted_info_json_str  # Store extracted JSON (or error JSON) globally
+            initial_readme_summary_for_llm = readme_extracted_info_json_str
             current_readme_summary = readme_extracted_info_json_str
             step_data['readme_summary_for_llm'] = readme_extracted_info_json_str
 
-            # Prepare user query segment for the main LLM
             current_user_query_segment = (
                 f"任务：为新克隆的Git仓库 '{git_url}' (项目名: {project_name_for_dir}) 进行Conda环境配置。\n"
                 f"当前系统提示中已包含目标Conda环境名称 '{env_name}'、项目根目录 '{project_cloned_root_path}' 以及下方从README文件 ('{readme_filename_found or '未找到/读取失败'}') 中提取的关键信息。请基于这些信息进行分析。\n\n"
                 f"以下是当前项目根目录 (`{project_cloned_root_path}`) 下的目录列表:\n"
                 f"```text\n{dir_listing_content}\n```\n\n"
                 f"从README ('{readme_filename_found or '未找到/提取失败'}') 提取的关键配置信息如下 (JSON格式):\n"
-                # The content of current_readme_summary will be formatted by build_llm_input_for_client
-                # For this initial query, we can show a more direct representation if desired,
-                # but for consistency, let the build_llm_input_for_client handle the <README_CONTENT_PLACEHOLDER>
                 f"{current_readme_summary}\n\n"
                 f"请进行初步分析。如果上述提取的README信息不明确、不完整或有疑问，你可以通过在 `files_to_read` 中指定 '{readme_filename_found}' 来请求读取原始README文件全文。"
                 f"如果需要查看项目中的其他文件以获取更详细的配置信息，请在 `files_to_read` 中列出它们的相对路径。"
@@ -780,31 +790,62 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
             files_read = step_data.get('files_just_read_content', {})
             feedback_parts = []
             if files_read:
-                feedback_parts.append("\n--- 系统已读取你请求的文件，内容如下（或摘要） ---")
-                max_len_single_file_feedback = 30000#min(MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT // 10, 30000)  # 保持不变
+                feedback_parts.append("\n--- 系统已读取你请求的文件，内容如下 ---")  # 移除了“（或摘要）”
+                max_len_single_file_feedback = int(MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT * 0.8)  # 大幅放宽，优先文件内容
                 total_len_files_feedback = 0
-                max_total_len_files_feedback = 30000#min(MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT // 4, 30000)  # 保持不变
+                # max_total_len_files_feedback 现在不严格限制，因为最终由 build_llm_input_for_client 控制
+                # 但我们仍然可以有一个非常大的上限，以防止极端情况
+                very_large_total_files_feedback_limit = MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT * 2  # 允许超过单个提示，因为 build_llm_input 会处理
 
                 for path, content_val in files_read.items():
-                    if total_len_files_feedback >= max_total_len_files_feedback:
-                        feedback_parts.append(f"\n...(更多文件读取内容因长度限制未在此处显示)...\n");
-                        break
-                    display_content = str(content_val)
-                    if len(display_content) > max_len_single_file_feedback:
-                        display_content = display_content[:max_len_single_file_feedback] + "\n...(文件内容过长，此处为摘要)..."
+                    display_content = str(content_val)  # 假设 content_val 已经是读取并经过初步安全截断的
 
-                    entry_len = len(f"文件 '{path}':\n```text\n{display_content}\n```\n")
-                    if total_len_files_feedback + entry_len > max_total_len_files_feedback:
-                        remaining_budget = max_total_len_files_feedback - total_len_files_feedback
-                        chars_for_this_file_header = len(f"文件 '{path}':\n```text\n...\n```\n")
-                        if remaining_budget > chars_for_this_file_header:
-                            display_content = display_content[:(remaining_budget - chars_for_this_file_header)] + "..."
-                        else:
-                            feedback_parts.append(f"\n...(文件 '{path}' 内容因长度限制未在此处显示)...\n");
-                            continue
-                    feedback_parts.append(f"文件 '{path}':\n```text\n{display_content}\n```\n")
-                    total_len_files_feedback += entry_len
-            if prev_res and prev_res.get("command_executed"):
+                    current_file_header = f"文件 '{path}':\n```text\n"
+                    current_file_footer = "\n```\n"
+
+                    # 为 current_user_query_segment 中的预览做一个适度的截断，但目标是尽量完整
+                    # 真正的完整性由 build_llm_input_for_client 保证
+                    preview_len_this_file = len(display_content)
+                    suffix_if_truncated = ""
+                    if len(current_file_header) + preview_len_this_file + len(
+                            current_file_footer) + total_len_files_feedback > very_large_total_files_feedback_limit:
+                        available_space = very_large_total_files_feedback_limit - total_len_files_feedback - len(
+                            current_file_header) - len(current_file_footer) - 50  # 50 for suffix
+                        if available_space > 100:  # 至少能显示一点
+                            preview_len_this_file = available_space
+                            suffix_if_truncated = "\n...(内容较长，此处为部分预览，将尝试完整送入LLM)..."
+                        else:  # 连预览都放不下了
+                            feedback_parts.append(
+                                f"\n...(文件 '{path}' 内容过长，本地预览空间不足，将尝试完整送入LLM)...\n")
+                            continue  # 跳过这个文件的预览
+
+                    display_content_for_feedback = display_content[:preview_len_this_file] + suffix_if_truncated
+
+                    feedback_parts.append(current_file_header + display_content_for_feedback + current_file_footer)
+                    total_len_files_feedback += len(current_file_header) + len(display_content_for_feedback) + len(
+                        current_file_footer)
+                    if total_len_files_feedback >= very_large_total_files_feedback_limit:
+                        feedback_parts.append(
+                            f"\n...(更多文件读取内容因本地显示长度限制未在此处完全展示，将尝试送入LLM)...\n");
+                        break
+
+            # +++ START OF MODIFICATION for file_write_result feedback +++
+            if prev_res and prev_res.get("operation_type") == "file_writes":
+                feedback_parts.append(f"\n--- 上一步文件写入操作反馈 ---")
+                summary_msg = prev_res.get("message", "文件写入操作已完成。")
+                feedback_parts.append(summary_msg)
+                results_list = prev_res.get("results_summary", [])
+                if results_list:
+                    for idx, res_item in enumerate(results_list):
+                        if isinstance(res_item, dict):
+                            fb_path = res_item.get('filepath', f'条目{idx + 1}')
+                            fb_succ = res_item.get('success', False)
+                            fb_msg = res_item.get('message', '无详情')
+                            feedback_parts.append(f"  - 文件 '{fb_path}': {'成功' if fb_succ else '失败'} - {fb_msg}")
+                if not prev_res.get("all_successful", True):
+                    feedback_parts.append("注意: 部分或全部文件写入操作失败。请分析上述详情，并决定下一步。")
+            elif prev_res and prev_res.get("command_executed"):  # 原有的命令执行反馈
+                # +++ END OF MODIFICATION for file_write_result feedback +++
                 feedback_parts.append(f"\n--- 上一步命令执行反馈 ---")
                 feedback_parts.append(
                     f"命令: `{prev_res.get('command_executed', 'N/A')}` (返回码: {prev_res.get('return_code', 'N/A')})")
@@ -817,7 +858,7 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
                     "".join(feedback_parts) +
                     f"\n\n--- 当前任务指令 ---\n"
                     f"请基于以上最新反馈、完整的对话历史以及系统提示中提供的“当前任务状态”（包括项目根目录 '{project_cloned_root_path}', 目标Conda环境名称 '{env_name}', 以及从README提取的信息），继续进行配置。\n"
-                    f"如果先前提取的README信息不足或有疑问，你可以通过在 `files_to_read` 中指定 '{initial_readme_name or 'README.md'}' 来请求读取原始README文件全文。"  # 提醒可以读全文
+                    f"如果先前提取的README信息不足或有疑问，你可以通过在 `files_to_read` 中指定 '{initial_readme_name or 'README.md'}' 来请求读取原始README文件全文。"
                     f"你需要读取更多其他文件吗？或者现在可以生成命令了？请给出你的JSON响应。"
             )
             add_to_conversation_history("user_input_to_llm",
@@ -832,9 +873,9 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
             current_user_query_segment,
             project_cloned_root_path or "尚未确定",
             env_name,
-            current_readme_summary  # Pass the extracted JSON string (or error string)
+            current_readme_summary
         )
-        llm_client.system_prompt_content = final_system_prompt  # Set the main system prompt
+        llm_client.system_prompt_content = final_system_prompt
 
         display_sys_prompt_len = len(final_system_prompt)
         display_user_input_len = len(full_user_input_with_history)
@@ -853,7 +894,7 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
         socketio.emit('llm_stream_clear', {}, room=sid, namespace='/')
         try:
             for event_type, content_chunk_val in llm_client.get_response_stream(
-                    full_user_input_with_history, max_tokens=MAX_LLM_OUTPUT_TOKENS, temperature=0.1):  # Main LLM call
+                    full_user_input_with_history, max_tokens=MAX_LLM_OUTPUT_TOKENS, temperature=0.1):
                 if event_type == "delta_content" and content_chunk_val is not None:
                     accumulated_llm_text += content_chunk_val
                     socketio.emit('llm_general_stream', {'token': content_chunk_val}, room=sid, namespace='/');
@@ -894,13 +935,24 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
         has_cmds_key = "commands_to_execute" in (json_object_parsed or {})
         cmds_list = json_object_parsed.get("commands_to_execute", []) if json_object_parsed else []
         has_valid_cmds = has_cmds_key and isinstance(cmds_list, list) and len(cmds_list) > 0
+
         has_files_key = "files_to_read" in (json_object_parsed or {})
         files_list = json_object_parsed.get("files_to_read", []) if json_object_parsed else []
         has_valid_files = has_files_key and isinstance(files_list, list) and len(files_list) > 0
+
+        # +++ START OF ADDED CODE for files_to_write check +++
+        has_files_to_write_key = "files_to_write" in (json_object_parsed or {})
+        files_to_write_list = json_object_parsed.get("files_to_write", []) if json_object_parsed else []
+        has_valid_files_to_write = has_files_to_write_key and isinstance(files_to_write_list, list) and len(
+            files_to_write_list) > 0
+        # +++ END OF ADDED CODE for files_to_write check +++
+
         has_thought = bool(json_object_parsed and json_object_parsed.get("thought_summary"))
-        is_thought_only_valid = has_thought and not has_valid_cmds and not has_valid_files
+        is_thought_only_valid = has_thought and not has_valid_cmds and not has_valid_files and not has_valid_files_to_write  # +++ Modified +++
+
         valid_json_structure = not json_decode_error_occurred and json_object_parsed is not None and \
-                               (has_valid_cmds or has_valid_files or is_thought_only_valid)
+                               (
+                                           has_valid_cmds or has_valid_files or is_thought_only_valid or has_valid_files_to_write)  # +++ Modified +++
 
         if not valid_json_structure:
             if retry_count < MAX_LLM_RETRIES:
@@ -925,6 +977,26 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
             'text': f"LLM决策总结:\n{json_object_parsed['thought_summary']}"}, room=sid, namespace='/')
 
         files_to_read_now = [f for f in files_list if isinstance(f, str) and f.strip()]
+
+        # +++ START OF NEW CODE for files_to_write processing +++
+        actual_files_to_write_requests: List[Dict[str, str]] = []
+        if has_valid_files_to_write:
+            for file_write_obj in files_to_write_list:
+                if isinstance(file_write_obj, dict) and \
+                        isinstance(file_write_obj.get("path"), str) and file_write_obj["path"].strip() and \
+                        isinstance(file_write_obj.get("content"), str):
+                    actual_files_to_write_requests.append({
+                        "path": file_write_obj["path"].strip(),
+                        "content": file_write_obj["content"],
+                        "description": file_write_obj.get("description", "无描述")
+                    })
+                else:
+                    socketio.emit('status_update',
+                                  {'message': f"警告：跳过格式不正确的 'files_to_write' 对象: {file_write_obj}",
+                                   'type': 'warning'}, room=sid,
+                                  namespace='/')
+        # +++ END OF NEW CODE for files_to_write processing +++
+
         actual_commands_to_run: List[Tuple[str, str]] = []
         for cmd_obj in cmds_list:
             if isinstance(cmd_obj, dict) and isinstance(cmd_obj.get("command_line"), str) and cmd_obj[
@@ -943,9 +1015,13 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
                               namespace='/')
 
         next_step_data_base = {'git_url': git_url, 'determined_env_name': env_name,
-                               'initial_readme_name': initial_readme_name,  # Pass filename
+                               'initial_readme_name': initial_readme_name,
                                'project_cloned_root_path': project_cloned_root_path,
-                               'readme_summary_for_llm': current_readme_summary}  # Pass extracted JSON string
+                               'readme_summary_for_llm': current_readme_summary}
+
+        # --- 行动执行顺序和暂存逻辑 ---
+        pending_files_to_write_next = step_data.get('pending_files_to_write', [])
+        pending_commands_to_execute_next = step_data.get('pending_commands_to_execute', [])
 
         if files_to_read_now:
             socketio.emit('status_update',
@@ -959,16 +1035,64 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
             next_step_data = next_step_data_base.copy();
             next_step_data['step_type'] = 'feedback_after_read'
             next_step_data['files_just_read_content'] = read_files_content
-            next_step_data['previous_command_result'] = step_data.get('previous_command_result', {});
+            next_step_data['previous_command_result'] = step_data.get('previous_command_result',
+                                                                      {});  # Carry over if any
+            next_step_data[
+                'pending_files_to_write'] = actual_files_to_write_requests or pending_files_to_write_next  # Prioritize new requests
+            next_step_data['pending_commands_to_execute'] = actual_commands_to_run or pending_commands_to_execute_next
             process_setup_step(sid, next_step_data, 0);
             return
 
-        if actual_commands_to_run:
+        # 如果没有读取请求，处理暂存或新的写入请求
+        current_files_to_write_action = actual_files_to_write_requests or pending_files_to_write_next
+        if current_files_to_write_action:
+            socketio.emit('status_update',
+                          {'message': f"LLM请求写入 {len(current_files_to_write_action)} 个文件...", 'type': 'info'},
+                          room=sid, namespace='/')
+            all_writes_ok = True
+            last_write_results_summary = []
+            if not project_cloned_root_path:
+                socketio.emit('error_message', {'message': f"项目根路径无效，无法写入文件。", 'type': 'error'}, room=sid,
+                              namespace='/')
+                all_writes_ok = False
+            else:
+                for i, req in enumerate(current_files_to_write_action):
+                    path = req["path"];
+                    content = req["content"];
+                    desc = req["description"]
+                    socketio.emit('status_update', {
+                        'message': f"写入文件 ({i + 1}/{len(current_files_to_write_action)}): '{path}' ({desc})",
+                        'type': 'info'}, room=sid, namespace='/')
+                    write_result = executor.write_file_content(filepath_relative=path, content_to_write=content,
+                                                               working_directory=project_cloned_root_path)
+                    add_to_conversation_history("file_write_result", write_result, env_name_at_time=env_name)
+                    last_write_results_summary.append(write_result)
+                    if not write_result.get("success"):
+                        all_writes_ok = False
+                        socketio.emit('error_message',
+                                      {'message': f"写入文件 '{path}' 失败: {write_result.get('message', '未知错误')}",
+                                       'type': 'error'}, room=sid, namespace='/')
+
+            next_step_data = next_step_data_base.copy()
+            next_step_data['step_type'] = 'feedback'
+            next_step_data['previous_command_result'] = {
+                "operation_type": "file_writes", "all_successful": all_writes_ok,
+                "results_summary": last_write_results_summary,
+                "message": "文件写入操作已执行。" if all_writes_ok else "部分或全部文件写入操作失败。"
+            }
+            next_step_data['pending_commands_to_execute'] = actual_commands_to_run or pending_commands_to_execute_next
+            next_step_data['pending_files_to_write'] = []  # Clear processed writes
+            process_setup_step(sid, next_step_data, 0)
+            return
+
+        # 如果没有读取和写入请求，处理暂存或新的命令执行请求
+        current_commands_to_run_action = actual_commands_to_run or pending_commands_to_execute_next
+        if current_commands_to_run_action:
             last_cmd_res = {};
             all_ok = True
-            for i, (cmd_str, desc) in enumerate(actual_commands_to_run):
+            for i, (cmd_str, desc) in enumerate(current_commands_to_run_action):
                 socketio.emit('status_update',
-                              {'message': f"执行 ({i + 1}/{len(actual_commands_to_run)}): {cmd_str} ({desc})",
+                              {'message': f"执行 ({i + 1}/{len(current_commands_to_run_action)}): {cmd_str} ({desc})",
                                'type': 'info'}, room=sid, namespace='/')
                 cmd_cwd = None
                 if not ("conda create" in cmd_str.lower() or "conda env create" in cmd_str.lower()):
@@ -986,14 +1110,18 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
                                    'type': 'error'}, room=sid, namespace='/');
                     all_ok = False;
                     break
-            next_step_data = next_step_data_base.copy();
+
+            next_step_data = next_step_data_base.copy()
             next_step_data['step_type'] = 'feedback'
             next_step_data['previous_command_result'] = last_cmd_res
             socketio.emit('status_update', {'message': "当前批次LLM指令执行完毕。" if all_ok else "批次指令因错误中断。",
                                             'type': 'success' if all_ok else 'warning'}, room=sid, namespace='/')
-            process_setup_step(sid, next_step_data, 0);
+            next_step_data['pending_commands_to_execute'] = []  # Clear processed commands
+            next_step_data['pending_files_to_write'] = []  # Should be empty already
+            process_setup_step(sid, next_step_data, 0)
             return
 
+        # 如果所有队列都空了
         socketio.emit('status_update', {'message': "LLM指示配置完成或无更多行动指令。", 'type': 'success'}, room=sid,
                       namespace='/')
         socketio.emit('setup_complete', {'env_name': env_name, 'project_path': project_cloned_root_path}, room=sid,
@@ -1024,7 +1152,8 @@ def handle_update_llm_config(data: Dict[str, str]):
         LLM_API_KEY = new_api_key if new_api_key else os.environ.get("LMSTUDIO_API_KEY", "lmstudio")
         updated_fields.append("API Key")
     if new_model_name and new_model_name != LLM_MODEL_NAME:
-        LLM_MODEL_NAME = new_model_name; updated_fields.append("Model Name")
+        LLM_MODEL_NAME = new_model_name;
+        updated_fields.append("Model Name")
     elif not new_model_name and LLM_MODEL_NAME != os.environ.get("LMSTUDIO_MODEL",
                                                                  "nikolaykozloff/deepseek-r1-0528-qwen3-8b"):
         LLM_MODEL_NAME = os.environ.get("LMSTUDIO_MODEL", "nikolaykozloff/deepseek-r1-0528-qwen3-8b")
@@ -1039,7 +1168,7 @@ def handle_update_llm_config(data: Dict[str, str]):
         return
 
     if initialize_llm_client(DEFAULT_SYSTEM_PROMPT_TEMPLATE,
-                             sid=sid):  # Re-initialize with current DEFAULT_SYSTEM_PROMPT_TEMPLATE
+                             sid=sid):
         msg = f"LLM 配置已更新: {', '.join(updated_fields)}. LLM 客户端已重新初始化。"
         print(f"SID {sid}: {msg}")
         socketio.emit('llm_config_updated', {'message': msg, 'type': 'success',
@@ -1075,7 +1204,10 @@ def handle_start_initial_setup(data: Dict[str, Any]):
     initial_step_data = {
         'step_type': 'initial_analysis', 'git_url': git_url, 'env_name': env_name_frontend,
         'determined_env_name': None, 'initial_readme_name': None, 'readme_summary_for_llm': None,
-        'project_cloned_root_path': None, 'previous_command_result': {}, 'files_just_read_content': {}
+        'project_cloned_root_path': None, 'previous_command_result': {},
+        'files_just_read_content': {},
+        'pending_files_to_write': [],  # +++ Initialize pending queues +++
+        'pending_commands_to_execute': []  # +++ Initialize pending queues +++
     }
     thread = threading.Thread(target=process_setup_step, args=(sid, initial_step_data, 0))
     thread.daemon = True;
@@ -1092,7 +1224,7 @@ if __name__ == '__main__':
     key_display = LLM_API_KEY[:5] + "..." if LLM_API_KEY and len(LLM_API_KEY) > 5 else (
         LLM_API_KEY if LLM_API_KEY else "未设置")
     print(f"LLM配置: 模型='{LLM_MODEL_NAME}', API Key='{key_display}', Base URL='{LLM_BASE_URL}'")
-    print(f"LLM提示硬性总长度限制: {MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT} chars")  # 保持不变
+    print(f"LLM提示硬性总长度限制: {MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT} chars")
     if 'llm' not in globals() or 'executor' not in globals():
         print("严重错误: llm.py 或 command_executor.py 未正确加载。")
     else:
