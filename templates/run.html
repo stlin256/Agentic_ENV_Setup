@@ -1,395 +1,1129 @@
-<!-- templates/run.html -->
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>项目自动配置助手</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <title>Agentic环境配置助手</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+    <script>
+        // ANSI 转义码处理库 (ansi_up)
+        var AnsiUp = (function () {
+            function AnsiUp() {
+                this.VERSION = "5.1.0";
+                this.ansi_colors = [
+                    // Normal colors
+                    [
+                        { rgb: [0, 0, 0], class_name: "ansi-black" },        // Black
+                        { rgb: [187, 0, 0], class_name: "ansi-red" },          // Red
+                        { rgb: [0, 187, 0], class_name: "ansi-green" },        // Green
+                        { rgb: [187, 187, 0], class_name: "ansi-yellow" },     // Yellow
+                        { rgb: [0, 0, 187], class_name: "ansi-blue" },         // Blue
+                        { rgb: [187, 0, 187], class_name: "ansi-magenta" },    // Magenta
+                        { rgb: [0, 187, 187], class_name: "ansi-cyan" },       // Cyan
+                        { rgb: [255, 255, 255], class_name: "ansi-white" }     // White
+                    ],
+                    // Bright colors
+                    [
+                        { rgb: [85, 85, 85], class_name: "ansi-bright-black" },     // Bright Black (Gray)
+                        { rgb: [255, 85, 85], class_name: "ansi-bright-red" },       // Bright Red
+                        { rgb: [0, 255, 0], class_name: "ansi-bright-green" },     // Bright Green
+                        { rgb: [255, 255, 85], class_name: "ansi-bright-yellow" },  // Bright Yellow
+                        { rgb: [85, 85, 255], class_name: "ansi-bright-blue" },      // Bright Blue
+                        { rgb: [255, 85, 255], class_name: "ansi-bright-magenta" }, // Bright Magenta
+                        { rgb: [85, 255, 255], class_name: "ansi-bright-cyan" },    // Bright Cyan
+                        { rgb: [255, 255, 255], class_name: "ansi-bright-white" }   // Bright White
+                    ],
+                ];
+                this.palette_256 = [];
+                this.fg = null;
+                this.bg = null;
+                this.bright = 0;
+                this.italic = false;
+                this.underline = false;
+                this.strikethrough = false;
+                this.inverse = false;
+                this.hidden = false;
+                this.text_attrs = [];
+
+                this.use_classes = true;
+                this.escape_for_html = true;
+                this.bright_also_as_bold = true;
+
+                this._buffer = '';
+                this.decorations = [];
+                this.setup_256_palette();
+            }
+
+            AnsiUp.prototype.setup_256_palette = function () {
+                var _this = this;
+                this.palette_256 = [];
+                this.ansi_colors[0].forEach(function (cv) { _this.palette_256.push(cv.rgb); });
+                this.ansi_colors[1].forEach(function (cv) { _this.palette_256.push(cv.rgb); });
+
+                var levels = [0, 95, 135, 175, 215, 255];
+                for (var r = 0; r < 6; r++) {
+                    for (var g = 0; g < 6; g++) {
+                        for (var b = 0; b < 6; b++) {
+                            this.palette_256.push([levels[r], levels[g], levels[b]]);
+                        }
+                    }
+                }
+                var grey_level = 8;
+                for (var i = 0; i < 24; i++, grey_level += 10) {
+                    this.palette_256.push([grey_level, grey_level, grey_level]);
+                }
+            };
+
+            AnsiUp.prototype.escapeForHtml = function (txt) {
+                return txt.replace(/[&<>]/gm, function (str) {
+                    if (str === "&") return "&";
+                    if (str === "<") return "<";
+                    if (str === ">") return ">";
+                    return '';
+                });
+            };
+
+            AnsiUp.prototype.old_linkify = function (txt) {
+                return txt.replace(/(https?:\/\/[^\s'"<>()]+)/g, '<a href="$1" target="_blank">$1</a>');
+            };
+
+            AnsiUp.prototype.reset_all_attributes = function() {
+                this.fg = null;
+                this.bg = null;
+                this.bright = 0;
+                this.italic = false;
+                this.underline = false;
+                this.strikethrough = false;
+                this.inverse = false;
+                this.hidden = false;
+                this.text_attrs = [];
+            };
+
+            AnsiUp.prototype.ansiToHtml = function (txt, options) {
+                var _this = this;
+                this.decorations = [];
+
+                if (options) {
+                    if (options.use_classes !== undefined) this.use_classes = options.use_classes;
+                    if (options.escape_for_html !== undefined) this.escape_for_html = options.escape_for_html;
+                    if (options.bright_also_as_bold !== undefined) this.bright_also_as_bold = options.bright_also_as_bold;
+                }
+
+                txt = this._buffer + txt;
+                if (txt.length > 0 && (txt.charAt(txt.length - 1) === '\x1b' || /\x1b\[(?:[\d;]*){0,2}$/.test(txt) && !/\x1b\[[\d;]*[a-zA-Z]$/.test(txt)) ) {
+                    this._buffer = txt;
+                    return '';
+                }
+                this._buffer = '';
+
+
+                var data = txt.split(/\x1b\[/);
+                var first = data.shift();
+
+                if (first !== '') {
+                    let text_to_write = this.escape_for_html ? this.escapeForHtml(first) : first;
+                    this.decorations.push({ text: this.old_linkify(text_to_write), style: '', classes: '' });
+                }
+
+                data.forEach(function (chunk) {
+                    var parts = chunk.match(/^([\d;]*)?([a-zA-Z])(.*)/m);
+                    if (!parts) {
+                        let text_to_write = _this.escape_for_html ? _this.escapeForHtml(chunk) : chunk;
+                        _this.write_true_color(_this.old_linkify(text_to_write));
+                        return;
+                    }
+
+                    var sgr_params_str = parts[1] || '';
+                    var cmd = parts[2];
+                    var text = parts[3] || '';
+
+                    if (_this.escape_for_html) text = _this.escapeForHtml(text);
+                    text = _this.old_linkify(text);
+
+
+                    if (cmd === 'm') {
+                        if (sgr_params_str === '' || sgr_params_str === '0') {
+                            _this.reset_all_attributes();
+                        } else {
+                            var nums = sgr_params_str.split(';').map(Number);
+                            var i = 0;
+                            while (i < nums.length) {
+                                var n = nums[i];
+                                switch (n) {
+                                    case 0: _this.reset_all_attributes(); break;
+                                    case 1: _this.bright = 1; if (_this.bright_also_as_bold && _this.text_attrs.indexOf('bold') === -1) _this.text_attrs.push('bold'); break;
+                                    case 2: _this.bright = 0; break;
+                                    case 3: _this.italic = true; if(_this.text_attrs.indexOf('italic') === -1) _this.text_attrs.push('italic'); break;
+                                    case 4: _this.underline = true; if(_this.text_attrs.indexOf('underline') === -1) _this.text_attrs.push('underline'); break;
+                                    case 5: case 6: break;
+                                    case 7: _this.inverse = true; break;
+                                    case 8: _this.hidden = true; break;
+                                    case 9: _this.strikethrough = true; if(_this.text_attrs.indexOf('strikethrough') === -1) _this.text_attrs.push('strikethrough'); break;
+
+                                    case 21:
+                                    case 22: _this.bright = 0; _this.text_attrs = _this.text_attrs.filter(a => a !== 'bold'); break;
+                                    case 23: _this.italic = false; _this.text_attrs = _this.text_attrs.filter(a => a !== 'italic'); break;
+                                    case 24: _this.underline = false; _this.text_attrs = _this.text_attrs.filter(a => a !== 'underline'); break;
+                                    case 25: break;
+                                    case 27: _this.inverse = false; break;
+                                    case 28: _this.hidden = false; break;
+                                    case 29: _this.strikethrough = false; _this.text_attrs = _this.text_attrs.filter(a => a !== 'strikethrough'); break;
+
+                                    case 30: case 31: case 32: case 33: case 34: case 35: case 36: case 37:
+                                        _this.fg = n - 30; break;
+                                    case 38:
+                                        if (nums[i+1] === 5 && nums[i+2] !== undefined) {
+                                            _this.fg = nums[i+2]; i += 2;
+                                        } else if (nums[i+1] === 2 && nums[i+2] !== undefined && nums[i+3] !== undefined && nums[i+4] !== undefined) {
+                                            _this.fg = [nums[i+2], nums[i+3], nums[i+4]]; i += 4;
+                                        }
+                                        break;
+                                    case 39: _this.fg = null; break;
+
+                                    case 40: case 41: case 42: case 43: case 44: case 45: case 46: case 47:
+                                        _this.bg = n - 40; break;
+                                    case 48:
+                                        if (nums[i+1] === 5 && nums[i+2] !== undefined) {
+                                            _this.bg = nums[i+2]; i += 2;
+                                        } else if (nums[i+1] === 2 && nums[i+2] !== undefined && nums[i+3] !== undefined && nums[i+4] !== undefined) {
+                                            _this.bg = [nums[i+2], nums[i+3], nums[i+4]]; i += 4;
+                                        }
+                                        break;
+                                    case 49: _this.bg = null; break;
+
+                                    case 90: case 91: case 92: case 93: case 94: case 95: case 96: case 97:
+                                        _this.fg = n - 90; _this.bright = 1; break;
+                                    case 100: case 101: case 102: case 103: case 104: case 105: case 106: case 107:
+                                        _this.bg = n - 100; _this.bright = 1; break;
+                                    default:
+                                        break;
+                                }
+                                i++;
+                            }
+                        }
+                    }
+                    _this.write_true_color(text);
+                });
+                return this.use_classes ? this._build_classes_string() : this._build_style_string();
+            };
+
+            AnsiUp.prototype.write_true_color = function (text) {
+                if (text === undefined || text.length === 0) return;
+
+                var styles = [];
+                var classes = [];
+                var final_fg_rgb = null, final_bg_rgb = null;
+
+                if (this.fg !== null) {
+                    if (typeof this.fg === 'number') {
+                        final_fg_rgb = this.palette_256[this.fg + (this.bright && this.fg < 8 ? 8 : 0)];
+                        if (this.use_classes && this.fg < 8) {
+                            classes.push(this.ansi_colors[this.bright][this.fg].class_name + "-fg");
+                        } else if (this.use_classes && this.fg >= 8 && this.fg <= 15) {
+                            classes.push(this.ansi_colors[1][this.fg - 8].class_name + "-fg");
+                        } else if (this.use_classes) {
+                             classes.push(`ansi-palette-${this.fg}-fg`);
+                        }
+                    } else {
+                        final_fg_rgb = this.fg;
+                    }
+                    if (!this.use_classes || (typeof this.fg === 'object') || (this.use_classes && typeof this.fg === 'number' && !(this.fg<16) )) {
+                         if(final_fg_rgb) styles.push('color:rgb(' + final_fg_rgb.join(',') + ')');
+                    }
+                }
+
+                if (this.bg !== null) {
+                    if (typeof this.bg === 'number') {
+                        final_bg_rgb = this.palette_256[this.bg + (this.bright && this.bg < 8 ? 8 : 0)];
+                         if (this.use_classes && this.bg < 8) {
+                            classes.push(this.ansi_colors[this.bright][this.bg].class_name + "-bg");
+                         } else if (this.use_classes && this.bg >= 8 && this.bg <= 15) {
+                            classes.push(this.ansi_colors[1][this.bg - 8].class_name + "-bg");
+                         } else if (this.use_classes) {
+                            classes.push(`ansi-palette-${this.bg}-bg`);
+                         }
+                    } else {
+                        final_bg_rgb = this.bg;
+                    }
+                    if (!this.use_classes || (typeof this.bg === 'object') || (this.use_classes && typeof this.bg === 'number' && !(this.bg<16))) {
+                        if(final_bg_rgb) styles.push('background-color:rgb(' + final_bg_rgb.join(',') + ')');
+                    }
+                }
+
+                if (this.inverse) {
+                    if (final_fg_rgb || final_bg_rgb) {
+                        let temp_fg_rgb_val = final_fg_rgb;
+                        let temp_bg_rgb_val = final_bg_rgb;
+
+                        if (!temp_fg_rgb_val) temp_fg_rgb_val = [0,0,0];
+                        if (!temp_bg_rgb_val) temp_bg_rgb_val = this.use_classes ? [238,238,238] : [255,255,255];
+
+                        final_fg_rgb = temp_bg_rgb_val;
+                        final_bg_rgb = temp_fg_rgb_val;
+
+                        styles = [];
+                        if(final_fg_rgb) styles.push('color:rgb(' + final_fg_rgb.join(',') + ')');
+                        if(final_bg_rgb) styles.push('background-color:rgb(' + final_bg_rgb.join(',') + ')');
+                        if (this.use_classes) {
+                            classes = classes.filter(c => !c.endsWith('-fg') && !c.endsWith('-bg'));
+                        }
+                    }
+                }
+
+                this.text_attrs.forEach(function(attr) {
+                    if (this.use_classes) {
+                        classes.push('ansi-' + attr);
+                    } else {
+                        if (attr === 'bold') styles.push('font-weight:bold');
+                        if (attr === 'italic') styles.push('font-style:italic');
+                        if (attr === 'underline') styles.push('text-decoration:underline');
+                        if (attr === 'strikethrough') styles.push('text-decoration:line-through');
+                    }
+                }.bind(this));
+
+                if (this.hidden && this.use_classes) classes.push('ansi-hidden');
+                else if (this.hidden) styles.push('visibility:hidden');
+
+                this.decorations.push({
+                    text: text,
+                    style: styles.join(';'),
+                    classes: classes.join(' ')
+                });
+            };
+
+            AnsiUp.prototype._build_classes_string = function () {
+                var R = '';
+                this.decorations.forEach(function (d) {
+                    if (d.classes || d.style) {
+                        R += '<span' + (d.classes ? ' class="' + d.classes + '"' : '') +
+                                        (d.style ? ' style="' + d.style + '"' : '') + '>' +
+                                        d.text + '</span>';
+                    } else {
+                        R += d.text;
+                    }
+                });
+                this.decorations = [];
+                return R;
+            };
+
+            AnsiUp.prototype._build_style_string = function () {
+                var R = '';
+                this.decorations.forEach(function (d) {
+                     if (d.style) {
+                        R += '<span style="' + d.style + '">' + d.text + '</span>';
+                    } else {
+                        R += d.text;
+                    }
+                });
+                this.decorations = [];
+                return R;
+            };
+
+            AnsiUp.prototype.ansiToText = function (txt) {
+                const old_escape_for_html = this.escape_for_html;
+                this.escape_for_html = false;
+                const html = this.ansiToHtml(txt, { use_classes: false });
+                this.escape_for_html = old_escape_for_html;
+                return html.replace(/<[^>]*>/g, '');
+            };
+
+            AnsiUp.prototype.ansiToJSON = function(txt, options) {
+                const self = this;
+                this.decorations = [];
+
+                if (options) {
+                    if (options.use_classes !== undefined) this.use_classes = options.use_classes;
+                    if (options.escape_for_html !== undefined) this.escape_for_html = options.escape_for_html;
+                    if (options.bright_also_as_bold !== undefined) this.bright_also_as_bold = options.bright_also_as_bold;
+                }
+
+                this.ansiToHtml(txt, options);
+
+                const json_output = this.decorations.map(function(dec) {
+                    let entry = { text: dec.text };
+                    if (self.use_classes) {
+                        entry.classes = dec.classes;
+                    }
+                    if (dec.style) {
+                        entry.style = dec.style;
+                    }
+                    return entry;
+                });
+                this.decorations = [];
+                return json_output;
+            };
+
+            return AnsiUp;
+        }());
+    </script>
     <style>
-        body { font-family: "Microsoft YaHei", "微软雅黑", Arial, sans-serif; margin: 0; padding: 0; background-color: #eef0f2; color: #333; display: flex; flex-direction: column; min-height: 100vh; font-size: 14px;}
-        .header { background-color: #343a40; color: white; padding: 15px 25px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); z-index: 1000; }
-        .header h1 { margin: 0; font-size: 1.6em; }
-        .container { display: flex; flex: 1; padding: 15px; gap: 15px; overflow: hidden; }
-        .controls-panel { flex: 0 0 380px; background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
-        .logs-container { flex: 1; display: flex; flex-direction: column; gap: 15px; overflow: hidden; }
-        .log-panel { background-color: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); display: flex; flex-direction: column; overflow: hidden; }
-        .log-panel h3 { font-size: 1.1em; color: #495057; background-color: #f8f9fa; padding: 10px 15px; margin: 0; border-bottom: 1px solid #e9ecef; display: flex; align-items: center; }
-        .log-panel h3 span[role="img"] { margin-right: 8px; font-size: 1.2em;}
-        .log-box { padding: 10px; overflow-y: auto; font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace; font-size: 0.85em; line-height: 1.5; flex-grow: 1; white-space: pre-wrap; word-break: break-all; }
-        .placeholder { color: #aaa; font-style: italic; padding: 5px; } /* Added padding to placeholder */
+        :root {
+            --primary-color: #3498db;
+            --secondary-color: #2ecc71;
+            --background-color: #f4f6f8;
+            --text-color: #333;
+            --card-bg-color: #ffffff;
+            --border-color: #e0e0e0;
+            --error-color: #e74c3c;
+            --warning-color: #f39c12;
+            --success-color: #27ae60;
+            --info-color: #3498db;
 
-        #llmPromptArea { min-height: 100px; max-height: 180px; background-color: #fdfdfe; color: #333;}
-        #llmThinkingArea { min-height: 120px; max-height: 250px; background-color: #e9f7fd; color: #0c5460;}
-        #llmHistoryArea { min-height: 150px; max-height: 300px; background-color: #f0fff0; }
-        #llmRawResponseDebugArea { min-height: 80px; max-height: 150px; background-color: #fff3cd; color: #664d03; }
-        #statusArea { min-height: 100px; max-height: 200px; }
+            --terminal-bg: #1e1e1e;
+            --terminal-text-default: #d4d4d4;
+            --terminal-font: 'Cascadia Code', 'Consolas', 'Menlo', 'Courier New', monospace;
 
-        /* Terminal-like styling for outputArea */
-        #outputArea {
-            flex-grow: 1;
-            background-color: #1e1e1e; /* Dark background like VSCode terminal */
-            color: #d4d4d4;       /* Light grey text */
-            min-height: 200px;
-            padding: 10px;        /* Padding inside the black box */
-            font-family: Consolas, "Courier New", monospace; /* Monospaced font */
-            font-size: 13px;      /* Typical terminal font size */
-            line-height: 1.4;     /* Spacing between lines */
+            --llm-thought-bg: #e8f4f8;
+            --llm-thought-text: #2c3e50;
+            --llm-thought-cmd-bg: #ddeeff;
+            --llm-thought-file-bg: #eeffee;
+
+            --llm-stream-bg: #f0f8ff;
+            --llm-stream-text: #4a4a4a;
+
+            --font-family: "Microsoft YaHei", "微软雅黑", "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body { font-family: var(--font-family); margin: 0; padding: 0; background-color: var(--background-color); color: var(--text-color); line-height: 1.6; display: flex; flex-direction: column; min-height: 100vh; font-size: 14px;}
+        .container { display: flex; flex-direction: column; flex-grow: 1; max-width: 1600px; margin: 0 auto; width: 100%; }
+
+        header { background-color: var(--primary-color); color: white; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        header h1 { margin: 0; font-size: 1.8rem; }
+        .connection-status { font-size: 0.9rem; padding: 0.3rem 0.8rem; border-radius: 5px; }
+        .status-connected { background-color: var(--success-color); color: white; }
+        .status-disconnected { background-color: var(--error-color); color: white; }
+        .status-connecting { background-color: var(--warning-color); color: black; }
+
+
+        .main-content { display: flex; flex-grow: 1; padding: 1rem; gap: 1rem; }
+        .sidebar { flex: 0 0 380px; background-color: var(--card-bg-color); padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); height: fit-content; display: flex; flex-direction: column; gap: 1rem;}
+        .sidebar section { padding-bottom: 1rem; margin-bottom: 1rem; border-bottom: 1px solid #eee; }
+        .sidebar section:last-child { border-bottom: none; margin-bottom: 0; }
+
+        .core-area { flex-grow: 1; display: flex; flex-direction: column; gap: 1rem; }
+
+        section.log-panel {
+            background-color: var(--card-bg-color);
+            padding: 0;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        section.log-panel h3 {
+            font-size: 1.1em;
+            color: #495057;
+            background-color: #f8f9fa;
+            padding: 10px 15px;
+            margin: 0;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            align-items: center;
+        }
+        section.log-panel h3 .fas { margin-right: 8px; font-size: 1.2em;}
+
+        .log-box {
+            padding: 10px 15px;
             overflow-y: auto;
-            white-space: pre-wrap; /* Preserve whitespace, wrap long lines */
-            word-break: break-all; /* Break long words if they overflow */
+            font-size: 0.9em;
+            line-height: 1.5;
+            flex-grow: 1;
         }
-        .command-output-line {
-            /* white-space: pre; /* This might prevent wrapping if pre-wrap on parent is not enough */
-            /* For \r to work correctly, we often want the browser *not* to auto-wrap this specific div */
-            /* but let the parent pre-wrap handle overall block. Let's test current setup first. */
-            display: block; /* Each logical line as a block */
-            min-height: calc(13px * 1.4); /* Ensure empty lines have height based on font-size * line-height */
+        .placeholder { color: #aaa; font-style: italic; padding: 5px; text-align: center; }
+
+        #llmRawResponseStream {
+            max-height: 280px;
+            background-color: var(--llm-stream-bg);
+            color: var(--llm-stream-text);
+            font-family: var(--terminal-font);
+            white-space: pre-wrap; word-break: break-all;
         }
-        .stdout-line { color: #9CDCFE; /* A common terminal stdout color (light blueish) */ }
-        .stderr-line { color: #F48771; /* A common terminal stderr color (light reddish) */ }
+        #llmAnalysisOutputContainer {
+            max-height: 300px;
+            background-color: #f9f9f9;
+        }
+        .llm-thought-card {
+            background-color: var(--llm-thought-bg);
+            color: var(--llm-thought-text);
+            border: 1px solid #cce7f0;
+            border-left: 5px solid var(--primary-color);
+            border-radius: 5px;
+            padding: 12px;
+            margin-bottom: 10px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+            font-family: var(--font-family);
+            font-size: 0.95rem;
+        }
+        .llm-thought-card small { display: block; margin-bottom: 6px; color: #555; font-size: 0.8em;}
+        .llm-thought-card .thought-summary { white-space: pre-wrap; word-break: break-word; margin-bottom: 10px; }
+        .llm-thought-card .thought-actions-title { font-weight: bold; margin-top: 10px; margin-bottom: 5px; color: #337ab7; font-size: 0.9em;}
+        .llm-thought-card .thought-actions-title .fas { font-size: 1em; margin-right: 5px;}
+        .llm-thought-card .thought-action-item {
+            font-family: var(--terminal-font);
+            font-size: 0.85em;
+            padding: 4px 6px;
+            margin-bottom: 4px;
+            border-radius: 3px;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .llm-thought-card .thought-command-item { background-color: var(--llm-thought-cmd-bg); border-left: 3px solid var(--secondary-color); }
+        .llm-thought-card .thought-command-item .cmd-desc { color: #555; font-style: italic; font-size: 0.9em; margin-left: 0.5em;}
+        .llm-thought-card .thought-file-item { background-color: var(--llm-thought-file-bg); border-left: 3px solid var(--warning-color); }
+
+        #statusMessages {
+            max-height: 180px;
+            font-family: var(--font-family);
+            font-size: 0.9em; /* Readable font size */
+        }
+        .status-log-entry {
+            margin-bottom: 5px;
+            padding: 4px 0; /* Adjusted padding */
+            border-bottom: 1px dotted #eee;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .status-log-entry:last-child { border-bottom: none; }
+        .status-info { color: var(--info-color); }
+        .status-success { color: var(--success-color); font-weight: bold; }
+        .status-warning { color: var(--warning-color); background-color: #fff8e1; padding:2px 5px; border-radius:3px;} /* Adjusted */
+        .status-error { color: var(--error-color); font-weight: bold;}
 
 
-        h2 { color: #343a40; margin-top: 0; margin-bottom: 20px; font-size: 1.3em;}
-        label { display: block; margin-bottom: 5px; font-weight: 600; color: #495057; font-size: 0.9em;}
-        input[type="text"], textarea { width: calc(100% - 22px); padding: 9px; border: 1px solid #ced4da; border-radius: 4px; font-size: 0.9em; box-sizing: border-box; margin-bottom:10px;}
-        textarea { min-height: 80px; resize: vertical; }
-        button { background-color: #007bff; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.95em; width: 100%; transition: background-color 0.2s; }
-        button:hover { background-color: #0056b3; }
-        button:disabled { background-color: #adb5bd; cursor: not-allowed; }
+        #commandOutput {
+            max-height: 400px;
+            font-size: 0.9em;
+            line-height: 1.6;
+            background-color: var(--terminal-bg);
+            color: var(--terminal-text-default);
+            font-family: var(--terminal-font);
+            white-space: pre-wrap;
+            word-break: break-all;
+            padding: 1em;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+        .command-block { margin-bottom: 1em; padding-bottom: 0.5em; border-bottom: 1px dashed #444; }
+        .command-block:last-child { border-bottom: none; }
+        .command-block .command-line-display { color: #80d0ff; font-weight: bold; margin-bottom: 0.3em; } /* Added margin-bottom */
+        .command-block .command-line-display .prompt-char { color: #569cd6; }
+        .command-block .command-output-content { margin-top: 0.5em; white-space: pre-wrap; word-break: break-all;}
+        .command-block .command-return-code-display { font-style: italic; margin-top: 0.5em;}
 
-        .log-entry { margin-bottom: 5px; padding-bottom: 5px; border-bottom: 1px dotted #eee; }
-        .log-entry:last-child { border-bottom: none; }
-        .log-entry pre { margin:0; white-space: pre-wrap; word-break: break-all; }
 
-        .status-info { color: #007bff; }
-        .status-success { color: #28a745; font-weight: bold; }
-        .status-warning { color: #856404; background-color: #fff3cd; padding:2px 5px; border-radius:3px;}
-        .status-error { color: #dc3545; font-weight: bold;}
+        /* Debug Info Log Boxes */
+        /* Ensure debug titles are also styled like other log panel titles */
+        #debugInfoSection .log-panel h3 {
+            font-size: 1em; /* Override if needed for debug panels */
+            padding: 8px 12px;
+            color: #495057;
+            background-color: #f8f9fa;
+            margin: 0;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            align-items: center;
+        }
+        #llmPromptSent, #llmRawResponseDebug, #llmStructuredOutputHistoryDebug {
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap; word-break: break-all;
+            font-size: 0.85em;
+        }
+        #llmPromptSent { background-color: #fdfdfe; color: #333;}
+        #llmRawResponseDebugContainerParent { display:none; } /* Parent of the debug raw response panel */
+        #llmRawResponseDebug { background-color: #fff3cd; color: #664d03; }
+        #llmStructuredOutputHistoryDebug { background-color: #f0fff0; }
 
-        .command-start-msg { color: #6CB6FF; font-weight: bold; margin-top: 8px; display: block; padding: 5px 0; }
-        .command-end-msg { color: #D0AFFF; margin-bottom: 8px; display: block; border-bottom: 1px dashed #3e444f; padding-bottom: 6px; padding: 5px 0; }
 
-        .thinking-text-live { white-space: pre-wrap; }
-        .final-analysis-text { margin-top: 8px; padding-top: 8px; border-top: 1px dotted #ccc; white-space: pre-wrap; }
+        /* Sidebar Controls */
+        .sidebar h2 { color: #343a40; margin-top: 0; margin-bottom: 15px; font-size: 1.3em; border-bottom: none;}
+        .sidebar label { display: block; margin-bottom: 5px; font-weight: 600; color: #495057; font-size: 0.9em;}
+        .sidebar input[type="text"], .sidebar input[type="password"], .sidebar textarea {
+            width: calc(100% - 18px);
+            padding: 8px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 0.9em;
+            box-sizing: border-box;
+            margin-bottom:10px;
+        }
+        .sidebar textarea#systemPrompt { min-height: 100px; max-height: 180px; resize: vertical; }
+        .sidebar button {
+            background-color: var(--primary-color);
+            color: white; padding: 10px 15px;
+            border: none; border-radius: 4px;
+            cursor: pointer; font-size: 0.95em;
+            width: 100%;
+            transition: background-color 0.2s;
+        }
+        .sidebar button:hover { background-color: #0056b3; }
+        .sidebar button:disabled { background-color: #adb5bd; cursor: not-allowed; }
+        .sidebar .button-secondary { background-color: var(--secondary-color); }
+        .sidebar .button-secondary:hover { background-color: #1e7e34; }
+        .sidebar .button-danger { background-color: var(--error-color); }
+        .sidebar .button-danger:hover { background-color: #c82333; }
+        .sidebar .button-group { display: flex; gap: 10px; }
+        .sidebar .button-group button { flex: 1; }
 
-        .history-entry { margin-bottom: 12px; padding: 8px; border: 1px solid #e0e0e0; border-radius: 5px; background-color: #f9f9f9; }
-        .history-entry strong { color: #0056b3; display: block; margin-bottom: 4px; }
-        .history-entry ul { padding-left: 20px; margin: 5px 0; }
-        .history-entry li { margin-bottom: 3px; }
-        .history-entry .cmd-desc { color: #555; font-style: italic; font-size:0.9em; }
+
+        .collapsible-section .collapsible-trigger { cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+        .collapsible-section .collapsible-trigger .fa-chevron-down, .collapsible-section .collapsible-trigger .fa-chevron-right { transition: transform 0.2s ease-in-out; margin-left: auto; }
+        .collapsible-section .collapsible-content { display: none; padding-top: 1rem; margin-top: 1rem; }
+        .collapsible-section.open .collapsible-content { display: block; }
+        .collapsible-section.open .collapsible-trigger .fa-chevron-right { transform: rotate(90deg); }
+        .collapsible-title-info { font-size: 0.9rem; color: #777; margin-left: 10px; font-weight: normal; }
+
+        label[for="showRawDebugCheckbox"] {display:inline-block; font-weight:normal; margin-left:5px; vertical-align:middle; font-size: 0.9em;}
+
+        footer { text-align: center; padding: 1rem; background-color: #e9ecef; color: #6c757d; font-size: 0.9rem; margin-top: auto; }
+
+        /* ANSI Colors from AnsiUp */
+        .ansi-black-fg { color: #000000; } .ansi-red-fg { color: #AA0000; }
+        .ansi-green-fg { color: #00AA00; } .ansi-yellow-fg { color: #AA5500; }
+        .ansi-blue-fg { color: #0000AA; } .ansi-magenta-fg { color: #AA00AA; }
+        .ansi-cyan-fg { color: #00AAAA; } .ansi-white-fg { color: #AAAAAA; }
+        .ansi-bright-black-fg { color: #555555; } .ansi-bright-red-fg { color: #FF5555; }
+        .ansi-bright-green-fg { color: #55FF55; } .ansi-bright-yellow-fg { color: #FFFF55; }
+        .ansi-bright-blue-fg { color: #5555FF; } .ansi-bright-magenta-fg { color: #FF55FF; }
+        .ansi-bright-cyan-fg { color: #55FFFF; } .ansi-bright-white-fg { color: #FFFFFF; }
+
+        .ansi-black-bg { background-color: #000000; } .ansi-red-bg { background-color: #AA0000; }
+        .ansi-green-bg { background-color: #00AA00; } .ansi-yellow-bg { background-color: #AA5500; }
+        .ansi-blue-bg { background-color: #0000AA; } .ansi-magenta-bg { background-color: #AA00AA; }
+        .ansi-cyan-bg { background-color: #00AAAA; } .ansi-white-bg { background-color: #AAAAAA; }
+        .ansi-bright-black-bg { background-color: #555555; } .ansi-bright-red-bg { background-color: #FF5555; }
+        .ansi-bright-green-bg { background-color: #55FF55; } .ansi-bright-yellow-bg { background-color: #FFFF55; }
+        .ansi-bright-blue-bg { background-color: #5555FF; } .ansi-bright-magenta-bg { background-color: #FF55FF; }
+        .ansi-bright-cyan-bg { background-color: #55FFFF; } .ansi-bright-white-bg { background-color: #FFFFFF; }
+
+        .ansi-bold { font-weight: bold; }
+        .ansi-italic { font-style: italic; }
+        .ansi-underline { text-decoration: underline; }
+        .ansi-strikethrough { text-decoration: line-through; }
+        .ansi-hidden { visibility: hidden; }
     </style>
 </head>
 <body>
-    <div class="header"><h1>项目自动配置助手</h1></div>
     <div class="container">
-        <div class="controls-panel">
-            <h2>控制面板</h2>
-            <div>
-                <h3>模型配置</h3>
-                <label for="systemPrompt">系统提示词:</label>
-                <textarea id="systemPrompt" rows="10">{{ current_system_prompt }}</textarea>
-                <button id="updatePromptBtn">更新提示词</button>
-            </div>
-            <div>
-                <h3>项目输入</h3>
-                <label for="gitUrl">GitHub 仓库链接:</label>
-                <input type="text" id="gitUrl" placeholder="https://github.com/用户名/仓库名.git" value="https://github.com/stlin256/AShare-AI-Stock-Picker.git">
-                <label for="envName">Conda 环境名称 (可选):</label>
-                <input type="text" id="envName" placeholder="my_project_env (留空则自动生成)">
-                <button id="startSetupBtn">开始分析与配置</button>
-            </div>
-             <div>
-                <input type="checkbox" id="showRawDebugCheckbox">
-                <label for="showRawDebugCheckbox" style="display:inline-block; font-weight:normal; margin-left:5px; vertical-align:middle;">显示LLM原始响应(调试)</label>
-            </div>
-        </div>
+        <header>
+            <h1><i class="fas fa-cogs"></i> Agentic环境配置助手</h1>
+            <div id="connectionStatus" class="connection-status status-connecting">状态：连接中...</div>
+        </header>
 
-        <div class="logs-container">
-            <div class="log-panel">
-                <h3><span role="img" aria-label="Prompt to LLM">📝</span> 发送给 LLM 的 Prompt (片段)</h3>
-                <div id="llmPromptArea" class="log-box"></div>
-            </div>
-            <div class="log-panel">
-                <h3><span role="img" aria-label="LLM Thinking">💬</span> LLM 实时分析/思考文本流</h3>
-                <div id="llmThinkingArea" class="log-box"></div>
-            </div>
-            <div class="log-panel">
-                <h3><span role="img" aria-label="History">📜</span> LLM 结构化输出历史</h3>
-                <div id="llmHistoryArea" class="log-box"></div>
-            </div>
-            <div class="log-panel" id="llmRawResponseDebugContainer" style="display:none;">
-                <h3><span role="img" aria-label="LLM Raw Response">📄</span> LLM 完整原始响应 (调试)</h3>
-                <div id="llmRawResponseDebugArea" class="log-box"></div>
-            </div>
-            <div class="log-panel">
-                <h3><span role="img" aria-label="Status Updates">📊</span> 状态与错误更新</h3>
-                <div id="statusArea" class="log-box"></div>
-            </div>
-            <div class="log-panel" style="flex-grow:1;">
-                <h3><span role="img" aria-label="Command Log">💻</span> 命令输出日志</h3>
-                <div id="outputArea" class="log-box"></div> <!-- Placeholder will be set by JS -->
-            </div>
+        <div class="main-content">
+            <aside class="sidebar">
+                <section id="projectInputSection">
+                    <h2><i class="fas fa-project-diagram"></i> 项目输入</h2>
+                    <label for="gitUrl">Git 仓库 URL:</label>
+                    <input type="text" id="gitUrl" name="gitUrl" placeholder="例如: https://github.com/user/repo.git" value="https://github.com/stlin256/AShare-AI-Stock-Picker.git">
+
+                    <label for="envName">期望环境名称 (可选):</label>
+                    <input type="text" id="envName" name="envName" placeholder="my_project_env (留空则自动生成)">
+
+                    <div class="button-group">
+                        <button id="startSetupBtn" class="button-secondary"><i class="fas fa-play"></i> 开始配置</button>
+                        <button id="clearLogsBtn" class="button-danger"><i class="fas fa-trash-alt"></i> 清空日志</button>
+                    </div>
+                </section>
+
+                <section id="llmConfigSection" class="collapsible-section">
+                    <h2 class="collapsible-trigger">
+                        <span><i class="fas fa-brain"></i> LLM 配置</span>
+                        <span id="llmConfigSummary" class="collapsible-title-info"></span>
+                        <i class="fas fa-chevron-right"></i>
+                    </h2>
+                    <div class="collapsible-content">
+                        <label for="llmBaseUrl">LLM Base URL:</label>
+                        <input type="text" id="llmBaseUrl" name="llmBaseUrl">
+                        <label for="llmApiKey">LLM API Key: <small>(留空则使用默认/环境变量)</small></label>
+                        <input type="password" id="llmApiKey" name="llmApiKey">
+                        <small id="apiKeyPresentStatus" style="display:block; margin-bottom:10px;"></small>
+                        <label for="llmModelName">LLM 模型名称:</label>
+                        <input type="text" id="llmModelName" name="llmModelName">
+                        <button id="updateLlmConfigBtn"><i class="fas fa-save"></i> 更新LLM配置</button>
+                    </div>
+                </section>
+
+                <section id="systemPromptConfigSection">
+                    <h2><i class="fas fa-file-alt"></i> 系统提示词</h2>
+                    <textarea id="systemPrompt" name="systemPrompt" rows="8">{{ current_system_prompt }}</textarea>
+                    <button id="updatePromptBtn"><i class="fas fa-save"></i> 更新提示词</button>
+                </section>
+                 <section>
+                    <input type="checkbox" id="showRawDebugCheckbox" style="vertical-align: middle;">
+                    <label for="showRawDebugCheckbox">显示LLM原始响应(调试)</label>
+                 </section>
+            </aside>
+
+            <main class="core-area">
+                <section class="log-panel" id="llmStreamSection">
+                    <h3><i class="fas fa-feather-alt"></i> LLM 实时响应流</h3>
+                    <div id="llmRawResponseStream" class="log-box"></div>
+                </section>
+
+                <section class="log-panel" id="llmAnalysisSection">
+                    <h3><i class="fas fa-comment-dots"></i> LLM 思考与决策</h3>
+                    <div id="llmAnalysisOutputContainer" class="log-box"></div>
+                </section>
+
+                <section class="log-panel" id="statusDisplaySection">
+                    <h3><i class="fas fa-tasks"></i> 任务进展</h3>
+                    <div id="statusMessages" class="log-box"></div>
+                </section>
+
+                <section class="log-panel" id="commandExecutionSection" style="flex-grow:1;">
+                    <h3><i class="fas fa-terminal"></i> 命令执行流</h3>
+                    <div id="commandOutput" class="log-box"></div>
+                </section>
+
+                <section class="log-panel collapsible-section" id="debugInfoSection">
+                    <h2 class="collapsible-trigger">
+                        <span><i class="fas fa-bug"></i> 调试信息</span>
+                        <i class="fas fa-chevron-right"></i>
+                    </h2>
+                    <div class="collapsible-content">
+                        <div class="log-panel">
+                            <h3>发送给 LLM 的 Prompt (片段)</h3>
+                            <div id="llmPromptSent" class="log-box"></div>
+                        </div>
+                        <div class="log-panel" id="llmRawResponseDebugContainerParent">
+                            <h3>LLM 完整原始响应 (调试)</h3>
+                            <div id="llmRawResponseDebug" class="log-box"></div>
+                        </div>
+                        <div class="log-panel">
+                            <h3>LLM 结构化输出历史 (调试)</h3>
+                            <div id="llmStructuredOutputHistoryDebug" class="log-box"></div>
+                        </div>
+                    </div>
+                </section>
+            </main>
         </div>
+        <footer>
+            <p>Github@STLIN256</p>
+        </footer>
     </div>
 
     <script>
-        const socket = io();
-        const llmPromptArea = document.getElementById('llmPromptArea');
-        const llmThinkingArea = document.getElementById('llmThinkingArea');
-        const llmHistoryArea = document.getElementById('llmHistoryArea');
-        const llmRawResponseDebugContainer = document.getElementById('llmRawResponseDebugContainer');
-        const llmRawResponseDebugArea = document.getElementById('llmRawResponseDebugArea');
-        const statusArea = document.getElementById('statusArea');
-        const outputArea = document.getElementById('outputArea'); // Target for terminal output
-        const systemPromptEl = document.getElementById('systemPrompt');
-        const updatePromptBtn = document.getElementById('updatePromptBtn');
-        const gitUrlEl = document.getElementById('gitUrl');
-        const envNameEl = document.getElementById('envName');
-        const startSetupBtn = document.getElementById('startSetupBtn');
-        const showRawDebugCheckbox = document.getElementById('showRawDebugCheckbox');
+        document.addEventListener('DOMContentLoaded', () => {
+            const socket = io();
+            const ansi_up = new AnsiUp();
+            ansi_up.use_classes = true;
+            ansi_up.escape_for_html = true;
 
-        const placeholders = {
-            'llmPromptArea': '等待发送 Prompt 给 LLM...',
-            'llmThinkingArea': 'LLM的中间分析和思考过程将在此流式显示...',
-            'llmHistoryArea': 'LLM的结构化指令输出历史将在此显示...',
-            'llmRawResponseDebugArea': 'LLM的原始响应将显示在这里...',
-            'statusArea': '暂无状态更新。',
-            'outputArea': '命令输出将在此显示...' // Placeholder for terminal output
-        };
+            const connectionStatus = document.getElementById('connectionStatus');
+            const llmBaseUrlInput = document.getElementById('llmBaseUrl');
+            const llmApiKeyInput = document.getElementById('llmApiKey');
+            const apiKeyPresentStatus = document.getElementById('apiKeyPresentStatus');
+            const llmModelNameInput = document.getElementById('llmModelName');
+            const updateLlmConfigBtn = document.getElementById('updateLlmConfigBtn');
+            const llmConfigSummarySpan = document.getElementById('llmConfigSummary');
+            const systemPromptEl = document.getElementById('systemPrompt');
+            const updatePromptBtn = document.getElementById('updatePromptBtn');
+            const gitUrlEl = document.getElementById('gitUrl');
+            const envNameEl = document.getElementById('envName');
+            const startSetupBtn = document.getElementById('startSetupBtn');
+            const clearLogsBtn = document.getElementById('clearLogsBtn');
 
-        function getInitialPlaceholder(elementId) {
-            return placeholders[elementId] || '';
-        }
+            const llmRawResponseStream = document.getElementById('llmRawResponseStream');
+            const llmAnalysisOutputContainer = document.getElementById('llmAnalysisOutputContainer');
+            const statusMessages = document.getElementById('statusMessages');
+            const commandOutput = document.getElementById('commandOutput');
 
-        function escapeHtml(unsafe) {
-            if (unsafe === null || unsafe === undefined) return "";
-            return unsafe.toString()
-                 .replace(/&/g, "&") // Corrected
-                 .replace(/</g, "<")  // Corrected
-                 .replace(/>/g, ">")  // Corrected
-                 .replace(/'/g, "'"); // Corrected
-        }
+            const llmPromptSent = document.getElementById('llmPromptSent');
+            const llmRawResponseDebugContainerParent = document.getElementById('llmRawResponseDebugContainerParent');
+            const llmRawResponseDebug = document.getElementById('llmRawResponseDebug');
+            const llmStructuredOutputHistoryDebug = document.getElementById('llmStructuredOutputHistoryDebug');
+            const showRawDebugCheckbox = document.getElementById('showRawDebugCheckbox');
 
-        function setInitialPlaceholders() {
-            for (const id in placeholders) {
-                const el = document.getElementById(id);
-                if (el) {
-                    el.innerHTML = `<div class="placeholder">${escapeHtml(getInitialPlaceholder(id))}</div>`;
+            let currentCommandBlock = null;
+            let currentCommandOutputContentDiv = null; // Div to hold the stdout/stderr for the current command
+
+            const placeholders = {
+                'llmRawResponseStream': 'LLM的原始Token流将在此显示...',
+                'llmAnalysisOutputContainer': 'LLM的决策和计划指令将以卡片形式在此显示...',
+                'llmStructuredOutputHistoryDebug': 'LLM的结构化指令输出历史将在此显示 (调试用)...',
+                'llmRawResponseDebug': 'LLM的完整原始响应将显示在这里 (调试用)...',
+                'statusMessages': '暂无状态更新。',
+                'commandOutput': '命令输出将在此显示...',
+                'llmPromptSent': '等待发送 Prompt 给 LLM...'
+            };
+
+            function escapeHtml(unsafe) {
+                if (unsafe === null || unsafe === undefined) return "";
+                return unsafe.toString()
+                     .replace(/&/g, "&")
+                     .replace(/</g, "<")
+                     .replace(/>/g, ">")
+                     .replace(/'/g, "'");
+            }
+
+            function setInitialPlaceholders() {
+                for (const id in placeholders) {
+                    const el = document.getElementById(id);
+                    if (el) {
+                        el.innerHTML = `<div class="placeholder">${escapeHtml(placeholders[id])}</div>`;
+                    }
                 }
             }
-        }
-        function clearPlaceholder(areaElement) {
-            if (!areaElement) return;
-            if (areaElement.children.length === 1 && areaElement.firstElementChild && areaElement.firstElementChild.classList.contains('placeholder')) {
-                areaElement.innerHTML = '';
-            }
-        }
 
-        function addLog(areaElement, message, className = '', isHtml = false, usePre = true) {
-            if (!areaElement) return;
-            clearPlaceholder(areaElement);
-            const entry = document.createElement('div');
-            if (className) entry.className = className; // Add base class like 'log-entry' if needed, or specific
-
-            if (isHtml) { entry.innerHTML = message; } // Caller ensures HTML is safe
-            else {
-                if (usePre) { // Use <pre> for most log types to preserve formatting
-                    const pre = document.createElement('pre');
-                    pre.style.margin = '0';
-                    pre.style.whiteSpace = 'pre-wrap';
-                    pre.textContent = message; // textContent is safe
-                    entry.appendChild(pre);
-                } else { // Direct text for simpler messages
-                    entry.textContent = message; // textContent is safe
+            function clearPlaceholder(areaElement) {
+                if (!areaElement) return;
+                const placeholder = areaElement.querySelector('.placeholder');
+                if (placeholder) {
+                    areaElement.innerHTML = '';
                 }
             }
-            areaElement.appendChild(entry);
-            areaElement.scrollTop = areaElement.scrollHeight;
-        }
 
-        function disableControls(disabled) {
-            systemPromptEl.disabled = disabled; updatePromptBtn.disabled = disabled;
-            gitUrlEl.disabled = disabled; envNameEl.disabled = disabled; startSetupBtn.disabled = disabled;
-        }
+            function addLogEntry(areaElement, message, className = '', isHtml = false) {
+                if (!areaElement) return;
+                clearPlaceholder(areaElement);
+                const entry = document.createElement('div');
+                if (className) entry.className = className;
 
-        showRawDebugCheckbox.addEventListener('change', function() {
-            llmRawResponseDebugContainer.style.display = this.checked ? 'flex' : 'none';
-        });
-
-        updatePromptBtn.addEventListener('click', () => {
-            const newPrompt = systemPromptEl.value.trim();
-            if (!newPrompt) { alert('系统提示词不能为空！'); return; }
-            clearPlaceholder(statusArea); addLog(statusArea, '正在更新系统提示词...', 'status-info', false, true);
-            socket.emit('update_system_prompt', { system_prompt: newPrompt });
-        });
-
-        startSetupBtn.addEventListener('click', () => {
-            const gitUrl = gitUrlEl.value.trim(); const envName = envNameEl.value.trim();
-            if (!gitUrl) { clearPlaceholder(statusArea); addLog(statusArea, 'GitHub 仓库链接不能为空！', 'status-error', false, true); alert('请输入 GitHub 仓库链接。'); return; }
-            setInitialPlaceholders();
-            clearPlaceholder(statusArea);
-            addLog(statusArea, `已请求为仓库：${escapeHtml(gitUrl)} 进行分析。环境名：${escapeHtml(envName) || '将自动生成'}`, 'status-info', false, true);
-            disableControls(true);
-            socket.emit('start_initial_setup', { git_url: gitUrl, env_name: envName });
-        });
-
-        socket.on('connect', () => { clearPlaceholder(statusArea); addLog(statusArea, '已连接到后端服务器。', 'status-success', false, true); disableControls(false); });
-        socket.on('disconnect', () => { clearPlaceholder(statusArea); addLog(statusArea, '已从后端服务器断开连接。', 'status-error', false, true); disableControls(true); });
-        socket.on('system_prompt_update', (data) => { if (data.system_prompt) { systemPromptEl.value = data.system_prompt; clearPlaceholder(statusArea); addLog(statusArea, `系统提示词已同步。`, 'status-info', false, true);}});
-
-        socket.on('status_update', (data) => {
-            clearPlaceholder(statusArea);
-            addLog(statusArea, data.message, `status-${data.type || 'info'}`, false, true);
-        });
-        socket.on('error_message', (data) => {
-            clearPlaceholder(statusArea);
-            addLog(statusArea, `错误：${data.message}`, `status-${data.type || 'error'}`, false, true);
-            disableControls(false);
-        });
-
-        socket.on('llm_prompt_sent', (data) => {
-            clearPlaceholder(llmPromptArea);
-            const promptText = data.prompt_head && data.prompt_tail ?
-                `头部:\n${data.prompt_head}\n...\n尾部:\n${data.prompt_tail}` :
-                data.prompt;
-            addLog(llmPromptArea, promptText, '', false, true);
-        });
-        socket.on('llm_raw_response_debug', (data) => {
-            clearPlaceholder(llmRawResponseDebugArea);
-            addLog(llmRawResponseDebugArea, data.raw_response, '', false, true);
-        });
-
-        let liveThinkingContentHolder = null;
-        socket.on('llm_stream_clear', (data) => {
-            llmThinkingArea.innerHTML = `<div class="placeholder">${escapeHtml(getInitialPlaceholder('llmThinkingArea'))}</div>`;
-            liveThinkingContentHolder = null;
-            if (data && data.error) {
-                clearPlaceholder(llmThinkingArea);
-                addLog(llmThinkingArea, "LLM流处理发生错误，已停止。", "status-error", false, true);
-            }
-        });
-        socket.on('llm_general_stream', (data) => {
-            clearPlaceholder(llmThinkingArea);
-            if (!liveThinkingContentHolder || !llmThinkingArea.contains(liveThinkingContentHolder)) {
-                liveThinkingContentHolder = document.createElement('div');
-                liveThinkingContentHolder.className = 'thinking-text-live'; // Ensure this class uses pre-wrap
-                llmThinkingArea.appendChild(liveThinkingContentHolder);
-            }
-            if (data.token) {
-                liveThinkingContentHolder.textContent += data.token;
-                llmThinkingArea.scrollTop = llmThinkingArea.scrollHeight;
-            }
-        });
-        socket.on('llm_final_analysis_text', (data) => { /* ... as before ... */
-            clearPlaceholder(llmThinkingArea); const summaryEntry = document.createElement('div'); summaryEntry.className = 'final-analysis-text'; const pre = document.createElement('pre'); pre.style.margin = '0'; pre.style.whiteSpace = 'pre-wrap'; pre.textContent = data.text; summaryEntry.appendChild(pre); if(liveThinkingContentHolder && llmThinkingArea.contains(liveThinkingContentHolder)){ llmThinkingArea.appendChild(summaryEntry); } else { llmThinkingArea.innerHTML = ''; llmThinkingArea.appendChild(summaryEntry); } llmThinkingArea.scrollTop = llmThinkingArea.scrollHeight; liveThinkingContentHolder = null;
-        });
-
-        socket.on('clear_history_display', () => { setInitialPlaceholders(); });
-        socket.on('llm_structured_output_history', (data) => { /* ... as before ... */
-            clearPlaceholder(llmHistoryArea); const output = data.output; const entryDiv = document.createElement('div'); entryDiv.className = 'history-entry'; let contentHtml = `<strong>LLM指令 (${new Date().toLocaleTimeString()})</strong>`; if (output.thought_summary) { contentHtml += `<p><strong>总结:</strong> ${escapeHtml(output.thought_summary).replace(/\n/g, '<br>')}</p>`; } if (output.files_to_read && output.files_to_read.length > 0) { contentHtml += `<p><strong>请求读取文件:</strong><ul>`; output.files_to_read.forEach(file => { contentHtml += `<li>${escapeHtml(file)}</li>`; }); contentHtml += `</ul></p>`; } if (output.commands_to_execute && output.commands_to_execute.length > 0) { contentHtml += `<p><strong>计划执行命令:</strong><ul>`; output.commands_to_execute.forEach(cmdObj => { contentHtml += `<li><code>${escapeHtml(cmdObj.command_line)}</code><br><span class="cmd-desc">${escapeHtml(cmdObj.description)}</span></li>`; }); contentHtml += `</ul></p>`; } if (!output.thought_summary && (!output.files_to_read || output.files_to_read.length === 0) && (!output.commands_to_execute || output.commands_to_execute.length === 0)) { contentHtml += "<p><i>(LLM未提供明确的下一步行动或总结)</i></p>"; } entryDiv.innerHTML = contentHtml; llmHistoryArea.appendChild(entryDiv); llmHistoryArea.scrollTop = llmHistoryArea.scrollHeight;
-        });
-
-        // --- ROBUST command_stream HANDLER ---
-        let currentActiveCommandOutputDiv = null; // Holds the <div> for the current logical line being outputted
-        let lineBuffer = ""; // Accumulates text for the current logical line
-
-        function createNewLineDiv(streamTypeClass) {
-            const div = document.createElement('div');
-            div.className = 'command-output-line ' + streamTypeClass;
-            outputArea.appendChild(div);
-            return div;
-        }
-
-        socket.on('command_stream', (data) => {
-            const autoScroll = outputArea.scrollHeight - outputArea.clientHeight <= outputArea.scrollTop + 20; // Check before adding content
-            clearPlaceholder(outputArea); // Clear placeholder if it's the first output for this area
-
-            if (data.type === 'command_start') {
-                currentActiveCommandOutputDiv = null; // Reset for new command
-                lineBuffer = "";
-                const startMsgDiv = document.createElement('div');
-                startMsgDiv.className = 'command-start-msg';
-                startMsgDiv.textContent = `>>> ${escapeHtml(data.command)}`;
-                outputArea.appendChild(startMsgDiv);
-            } else if (data.type === 'stdout_chunk' || data.type === 'stderr_chunk') {
-                const streamClass = data.type === 'stdout_chunk' ? 'stdout-line' : 'stderr-line';
-
-                if (!currentActiveCommandOutputDiv) { // If no current line div, create one
-                    currentActiveCommandOutputDiv = createNewLineDiv(streamClass);
-                    lineBuffer = ""; // Ensure buffer is reset for new div
+                if (isHtml) {
+                    entry.innerHTML = message;
                 } else {
-                    // Ensure class is correct if stream type switched mid-line (less common but possible)
-                    if (streamClass === 'stdout-line' && !currentActiveCommandOutputDiv.classList.contains('stdout-line')) {
-                        currentActiveCommandOutputDiv.classList.remove('stderr-line');
-                        currentActiveCommandOutputDiv.classList.add('stdout-line');
-                    } else if (streamClass === 'stderr-line' && !currentActiveCommandOutputDiv.classList.contains('stderr-line')) {
-                        currentActiveCommandOutputDiv.classList.remove('stdout-line');
-                        currentActiveCommandOutputDiv.classList.add('stderr-line');
-                    }
+                    const pre = document.createElement('pre');
+                    pre.style.margin = '0'; pre.style.whiteSpace = 'pre-wrap';
+                    pre.textContent = message;
+                    entry.appendChild(pre);
                 }
+                areaElement.appendChild(entry);
+                areaElement.scrollTop = areaElement.scrollHeight;
+            }
 
-                let chunk = data.chunk;
-                for (let i = 0; i < chunk.length; i++) {
-                    const char = chunk[i];
-                    if (char === '\r') {
-                        lineBuffer = ""; // Clear buffer for line overwrite
-                    } else if (char === '\n') {
-                        currentActiveCommandOutputDiv.textContent = lineBuffer; // Output buffered line
-                        lineBuffer = ""; // Reset buffer
-                        currentActiveCommandOutputDiv = null; // Nullify to create new div for next line
-                        if (i < chunk.length - 1) { // If more chars in chunk after \n
-                            currentActiveCommandOutputDiv = createNewLineDiv(streamClass); // Create it now
+            function disableControls(disabled) {
+                if(llmBaseUrlInput) llmBaseUrlInput.disabled = disabled;
+                if(llmApiKeyInput) llmApiKeyInput.disabled = disabled;
+                if(llmModelNameInput) llmModelNameInput.disabled = disabled;
+                if(updateLlmConfigBtn) updateLlmConfigBtn.disabled = disabled;
+                if(systemPromptEl) systemPromptEl.disabled = disabled;
+                if(updatePromptBtn) updatePromptBtn.disabled = disabled;
+                if(gitUrlEl) gitUrlEl.disabled = disabled;
+                if(envNameEl) envNameEl.disabled = disabled;
+                if(startSetupBtn) {
+                    startSetupBtn.disabled = disabled;
+                    startSetupBtn.innerHTML = disabled ? '<i class="fas fa-spinner fa-spin"></i> 处理中...' : '<i class="fas fa-play"></i> 开始配置';
+                }
+            }
+
+            document.querySelectorAll('.collapsible-section .collapsible-trigger').forEach(trigger => {
+                trigger.addEventListener('click', (event) => {
+                    if (event.target.closest('.collapsible-title-info')) return;
+                    const section = trigger.closest('.collapsible-section');
+                    section.classList.toggle('open');
+                    const icon = trigger.querySelector('.fa-chevron-right, .fa-chevron-down');
+                    if (icon) {
+                        if (section.classList.contains('open')) {
+                            icon.classList.remove('fa-chevron-right');
+                            icon.classList.add('fa-chevron-down');
+                        } else {
+                            icon.classList.remove('fa-chevron-down');
+                            icon.classList.add('fa-chevron-right');
                         }
-                    } else {
-                        lineBuffer += char; // Append char to buffer
                     }
-                }
-                // After loop, if there's a current line div, update it with the buffer
-                if (currentActiveCommandOutputDiv) {
-                    currentActiveCommandOutputDiv.textContent = lineBuffer;
-                }
+                });
+            });
 
-            } else if (data.type === 'command_end') {
-                // Finalize any buffered text for the last line
-                if (currentActiveCommandOutputDiv && lineBuffer) {
-                    currentActiveCommandOutputDiv.textContent = lineBuffer;
+            showRawDebugCheckbox.addEventListener('change', function() {
+                if (llmRawResponseDebugContainerParent) { // Target the parent panel
+                    llmRawResponseDebugContainerParent.style.display = this.checked ? 'block' : 'none';
                 }
-                currentActiveCommandOutputDiv = null;
-                lineBuffer = "";
+            });
 
-                const endMsgDiv = document.createElement('div');
-                endMsgDiv.className = 'command-end-msg';
-                let endMsgText = `<<< 命令执行完毕 (RC: ${data.return_code !== undefined ? data.return_code : 'N/A'})`;
-                // No need to add data.command here, it's less common for end message in terminals
-                endMsgDiv.textContent = endMsgText;
-                if (data.return_code === 0) { endMsgDiv.style.color = '#90EE90'; } // LightGreen
-                else { endMsgDiv.style.color = '#FF7F7F'; } // LightCoral
-                outputArea.appendChild(endMsgDiv);
-                // Add a visual separator after command completion for better readability
-                const hr = document.createElement('hr');
-                hr.style.borderColor = '#3e444f'; // Darker hr for dark background
-                outputArea.appendChild(hr);
+            if(updateLlmConfigBtn) {
+                updateLlmConfigBtn.addEventListener('click', () => {
+                    const config = {
+                        base_url: llmBaseUrlInput.value.trim(),
+                        api_key: llmApiKeyInput.value,
+                        model_name: llmModelNameInput.value.trim()
+                    };
+                    addLogEntry(statusMessages, '正在更新LLM配置...', 'status-log-entry status-info');
+                    socket.emit('update_llm_config', config);
+                });
             }
 
-            if (autoScroll) {
-                outputArea.scrollTop = outputArea.scrollHeight;
+            if(updatePromptBtn) {
+                updatePromptBtn.addEventListener('click', () => {
+                    const newPrompt = systemPromptEl.value.trim();
+                    if (!newPrompt) { alert('系统提示词不能为空！'); return; }
+                    addLogEntry(statusMessages, '正在更新系统提示词...', 'status-log-entry status-info');
+                    socket.emit('update_system_prompt', { system_prompt: newPrompt });
+                });
             }
-        });
-        // --- END OF ROBUST command_stream HANDLER ---
 
-        socket.on('setup_complete', (data) => {
-             clearPlaceholder(statusArea);
-             const message = `后端标记配置流程已全部结束。环境名：${escapeHtml(data.env_name)}。项目路径：${escapeHtml(data.project_path)}`;
-             addLog(statusArea, message, 'status-success', false, true);
-             alert(`配置流程已全部结束：${escapeHtml(data.env_name)}。\n请检查所有日志了解详细信息。`);
-             disableControls(false);
-        });
+            function clearAllLogAreas() {
+                const logAreasToClear = [
+                    llmRawResponseStream, llmAnalysisOutputContainer, statusMessages,
+                    commandOutput, llmPromptSent, llmRawResponseDebug, llmStructuredOutputHistoryDebug
+                ];
+                logAreasToClear.forEach(area => {
+                    if(area) area.innerHTML = '';
+                });
+                setInitialPlaceholders();
+            }
 
-        document.addEventListener('DOMContentLoaded', (event) => {
+            startSetupBtn.addEventListener('click', () => {
+                const gitUrl = gitUrlEl.value.trim();
+                const envName = envNameEl.value.trim();
+                if (!gitUrl) {
+                    addLogEntry(statusMessages, 'GitHub 仓库链接不能为空！', 'status-log-entry status-error');
+                    alert('请输入 GitHub 仓库链接。');
+                    return;
+                }
+                clearAllLogAreas();
+                addLogEntry(statusMessages, `已请求为仓库：${escapeHtml(gitUrl)} 进行分析。环境名：${escapeHtml(envName) || '将自动生成'}`, 'status-log-entry status-info');
+                disableControls(true);
+                socket.emit('start_initial_setup', { git_url: gitUrl, env_name: envName });
+            });
+
+            if (clearLogsBtn) {
+                clearLogsBtn.addEventListener('click', () => {
+                    clearAllLogAreas();
+                    addLogEntry(statusMessages, "所有日志区域已清空。", "status-log-entry status-info");
+                });
+            }
+
+            socket.on('connect', () => {
+                connectionStatus.textContent = '状态：已连接';
+                connectionStatus.className = 'connection-status status-connected';
+                addLogEntry(statusMessages, '已连接到后端服务器。', 'status-log-entry status-success');
+                disableControls(false);
+                socket.emit('get_llm_config');
+            });
+            socket.on('disconnect', () => {
+                connectionStatus.textContent = '状态：已断开';
+                connectionStatus.className = 'connection-status status-disconnected';
+                addLogEntry(statusMessages, '已从后端服务器断开连接。', 'status-log-entry status-error');
+                disableControls(true);
+            });
+            socket.on('connect_error', () => {
+                connectionStatus.textContent = '状态：连接失败';
+                connectionStatus.className = 'connection-status status-disconnected';
+                addLogEntry(statusMessages, '连接后端服务器失败。', 'status-log-entry status-error');
+            });
+
+            function updateLlmConfigForm(config) {
+                if (config) {
+                    if(llmBaseUrlInput) llmBaseUrlInput.value = config.base_url || '';
+                    if(llmModelNameInput) llmModelNameInput.value = config.model_name || '';
+                    if(apiKeyPresentStatus) apiKeyPresentStatus.textContent = config.api_key_present ? '(当前已设置)' : '(当前未设置或使用默认)';
+                    if(llmApiKeyInput) llmApiKeyInput.placeholder = config.api_key_present ? '输入新值以更改，留空则不更改' : '输入API Key';
+                    if(llmConfigSummarySpan) llmConfigSummarySpan.textContent = `(模型: ${config.model_name || '未指定'})`;
+                }
+            }
+            socket.on('current_llm_config', (data) => {
+                updateLlmConfigForm(data.config);
+            });
+            socket.on('llm_config_updated', (data) => {
+                addLogEntry(statusMessages, data.message, `status-log-entry status-${data.type || 'info'}`);
+                updateLlmConfigForm(data.config);
+                if(llmApiKeyInput) llmApiKeyInput.value = '';
+            });
+
+            socket.on('system_prompt_update', (data) => {
+                if (data.system_prompt && systemPromptEl) {
+                    systemPromptEl.value = data.system_prompt;
+                    addLogEntry(statusMessages, `系统提示词已同步。`, 'status-log-entry status-info');
+                }
+            });
+
+            socket.on('status_update', (data) => {
+                addLogEntry(statusMessages, data.message, `status-log-entry status-${data.type || 'info'}`);
+            });
+            socket.on('error_message', (data) => {
+                addLogEntry(statusMessages, `错误：${data.message}`, `status-log-entry status-${data.type || 'error'}`);
+                disableControls(false);
+            });
+
+            socket.on('llm_prompt_sent', (data) => {
+                clearPlaceholder(llmPromptSent);
+                const promptText = data.prompt_head && data.prompt_tail ?
+                    `头部:\n${data.prompt_head}\n...\n尾部:\n${data.prompt_tail}` :
+                    (data.prompt || "N/A");
+                addLogEntry(llmPromptSent, promptText, '', false);
+            });
+            socket.on('llm_raw_response_debug', (data) => {
+                clearPlaceholder(llmRawResponseDebug);
+                addLogEntry(llmRawResponseDebug, data.raw_response || "N/A", '', false);
+            });
+
+            let liveThinkingContentHolder = null;
+            socket.on('llm_stream_clear', (data) => {
+                llmRawResponseStream.innerHTML = `<div class="placeholder">${escapeHtml(placeholders['llmRawResponseStream'])}</div>`;
+                liveThinkingContentHolder = null;
+                if (data && data.error) {
+                    clearPlaceholder(llmRawResponseStream);
+                    addLogEntry(llmRawResponseStream, "LLM流处理发生错误，已停止。", "status-error");
+                }
+            });
+            socket.on('llm_general_stream', (data) => {
+                clearPlaceholder(llmRawResponseStream);
+                if (!liveThinkingContentHolder || !llmRawResponseStream.contains(liveThinkingContentHolder)) {
+                    liveThinkingContentHolder = document.createElement('div');
+                    liveThinkingContentHolder.style.whiteSpace = 'pre-wrap';
+                    liveThinkingContentHolder.style.wordBreak = 'break-all';
+                    llmRawResponseStream.appendChild(liveThinkingContentHolder);
+                }
+                if (data.token) {
+                    liveThinkingContentHolder.appendChild(document.createTextNode(data.token));
+                    llmRawResponseStream.scrollTop = llmRawResponseStream.scrollHeight;
+                }
+            });
+
+            socket.on('llm_structured_output_history', (data) => {
+                const llmResponse = data.output;
+
+                if (!llmResponse) {
+                    const cardError = document.createElement('div');
+                    cardError.className = 'llm-thought-card status-error'; // Add error class
+                    cardError.textContent = "错误：未能正确接收LLM的决策详情。";
+                    if(llmAnalysisOutputContainer.querySelector('.placeholder')) llmAnalysisOutputContainer.innerHTML = '';
+                    llmAnalysisOutputContainer.appendChild(cardError);
+                    llmAnalysisOutputContainer.scrollTop = llmAnalysisOutputContainer.scrollHeight;
+                    return;
+                }
+                clearPlaceholder(llmAnalysisOutputContainer);
+
+                const card = document.createElement('div');
+                card.className = 'llm-thought-card';
+
+                const timestamp = new Date().toLocaleTimeString();
+                const small = document.createElement('small');
+                small.textContent = `决策时间: ${timestamp}`;
+                card.appendChild(small);
+
+                if (llmResponse.thought_summary) {
+                    const summaryP = document.createElement('p');
+                    summaryP.className = 'thought-summary';
+                    summaryP.textContent = llmResponse.thought_summary;
+                    card.appendChild(summaryP);
+                }
+
+                if (llmResponse.commands_to_execute && llmResponse.commands_to_execute.length > 0) {
+                    const commandsTitle = document.createElement('div');
+                    commandsTitle.className = 'thought-actions-title';
+                    commandsTitle.innerHTML = '<i class="fas fa-terminal"></i> 计划执行命令:';
+                    card.appendChild(commandsTitle);
+                    llmResponse.commands_to_execute.forEach(cmdObj => {
+                        const cmdItem = document.createElement('div');
+                        cmdItem.className = 'thought-action-item thought-command-item';
+                        cmdItem.textContent = cmdObj.command_line || 'N/A';
+                        if (cmdObj.description) {
+                            const descSpan = document.createElement('span');
+                            descSpan.className = 'cmd-desc';
+                            descSpan.textContent = ` (${escapeHtml(cmdObj.description)})`;
+                            cmdItem.appendChild(descSpan);
+                        }
+                        card.appendChild(cmdItem);
+                    });
+                }
+
+                if (llmResponse.files_to_read && llmResponse.files_to_read.length > 0) {
+                    const filesTitle = document.createElement('div');
+                    filesTitle.className = 'thought-actions-title';
+                    filesTitle.innerHTML = '<i class="fas fa-file-alt"></i> 计划读取文件:';
+                    card.appendChild(filesTitle);
+                    llmResponse.files_to_read.forEach(filePath => {
+                        const fileItem = document.createElement('div');
+                        fileItem.className = 'thought-action-item thought-file-item';
+                        fileItem.textContent = escapeHtml(filePath);
+                        card.appendChild(fileItem);
+                    });
+                }
+
+                if (!llmResponse.thought_summary &&
+                    (!llmResponse.commands_to_execute || llmResponse.commands_to_execute.length === 0) &&
+                    (!llmResponse.files_to_read || llmResponse.files_to_read.length === 0)) {
+                    const noActionP = document.createElement('p');
+                    noActionP.innerHTML = "<i>(LLM未提供明确的下一步行动或总结)</i>";
+                    card.appendChild(noActionP);
+                }
+                llmAnalysisOutputContainer.appendChild(card);
+                llmAnalysisOutputContainer.scrollTop = llmAnalysisOutputContainer.scrollHeight;
+
+                if (llmStructuredOutputHistoryDebug) {
+                    clearPlaceholder(llmStructuredOutputHistoryDebug);
+                    const debugEntryDiv = document.createElement('div');
+                    debugEntryDiv.style.borderBottom = "1px dashed #ccc";
+                    debugEntryDiv.style.marginBottom = "10px";
+                    const pre = document.createElement('pre');
+                    pre.style.whiteSpace = 'pre-wrap'; pre.style.wordBreak = 'break-all';
+                    pre.textContent = JSON.stringify(llmResponse, null, 2);
+                    debugEntryDiv.appendChild(pre);
+                    llmStructuredOutputHistoryDebug.insertBefore(debugEntryDiv, llmStructuredOutputHistoryDebug.firstChild);
+                    llmStructuredOutputHistoryDebug.scrollTop = 0;
+                }
+            });
+
+            // --- Command Stream Handler (Streamed, not just on command_end) ---
+            socket.on('command_stream', (data) => {
+                clearPlaceholder(commandOutput);
+
+                if (data.type === 'command_start') {
+                    currentCommandBlock = document.createElement('div');
+                    currentCommandBlock.className = 'command-block';
+
+                    const cmdLineDisplay = document.createElement('div');
+                    cmdLineDisplay.className = 'command-line-display';
+                    cmdLineDisplay.innerHTML = `<span class="prompt-char">$ </span>${escapeHtml(data.command)}`;
+                    currentCommandBlock.appendChild(cmdLineDisplay);
+
+                    // Create a single div for all subsequent stdout/stderr for this command
+                    currentCommandOutputContentDiv = document.createElement('div');
+                    currentCommandOutputContentDiv.className = 'command-output-content';
+                    currentCommandBlock.appendChild(currentCommandOutputContentDiv);
+
+                    commandOutput.appendChild(currentCommandBlock);
+                } else if (data.type === 'stdout_chunk' || data.type === 'stderr_chunk') {
+                    if (currentCommandOutputContentDiv) {
+                        // AnsiUp processes each chunk and returns HTML with spans/classes
+                        // The parent div command-output-content handles overall block display
+                        // AnsiUp handles newlines within the chunk by typically just passing them through
+                        // or if it emits <br>, the browser will handle.
+                        // No need to create new divs per line here, let AnsiUp manage inline styling/structure.
+                        currentCommandOutputContentDiv.innerHTML += ansi_up.ansi_to_html(data.chunk);
+                    }
+                } else if (data.type === 'command_end') {
+                    if (currentCommandBlock) { // Ensure a block was started
+                        const returnCodeDisplay = document.createElement('div');
+                        returnCodeDisplay.className = 'command-return-code-display';
+                        returnCodeDisplay.textContent = `Exit code: ${data.return_code}`;
+                        if (data.return_code === 0) {
+                            returnCodeDisplay.style.color = 'var(--success-color)';
+                        } else {
+                            returnCodeDisplay.style.color = 'var(--error-color)';
+                        }
+                        currentCommandBlock.appendChild(returnCodeDisplay);
+                    }
+                    // Reset for the next command
+                    currentCommandBlock = null;
+                    currentCommandOutputContentDiv = null;
+                }
+
+                commandOutput.scrollTop = commandOutput.scrollHeight;
+            });
+
+
+            socket.on('setup_complete', (data) => {
+                 const message = `后端标记配置流程已全部结束。环境名：${escapeHtml(data.env_name)}。项目路径：${escapeHtml(data.project_path)}`;
+                 addLogEntry(statusMessages, message, 'status-log-entry status-success');
+                 alert(`配置流程已全部结束：${escapeHtml(data.env_name)}。\n请检查所有日志了解详细信息。`);
+                 disableControls(false);
+            });
+
+            socket.on('clear_history_display', () => {
+                clearAllLogAreas();
+                addLogEntry(statusMessages, "显示区域已由后端重置。", "status-log-entry status-info");
+            });
+
             setInitialPlaceholders();
             disableControls(false);
-            llmRawResponseDebugContainer.style.display = showRawDebugCheckbox.checked ? 'flex' : 'none';
+            if(llmRawResponseDebugContainerParent) {
+                llmRawResponseDebugContainerParent.style.display = showRawDebugCheckbox.checked ? 'block' : 'none';
+            }
         });
     </script>
 </body>

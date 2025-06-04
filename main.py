@@ -58,7 +58,7 @@ DEFAULT_SYSTEM_PROMPT_TEMPLATE = (
     "\n   - **在环境中执行命令**: 必须严格使用 `conda run -n <ENV_NAME_PLACEHOLDER> <命令>` 的格式。同样，请务必使用 `<ENV_NAME_PLACEHOLDER>`。例如: `conda run -n <ENV_NAME_PLACEHOLDER> python -m pip install -r requirements.txt`。"
     "\n   - **禁止**: 绝对禁止生成 `conda activate` 或 `source activate` 命令。在 `conda run` 中也绝对禁止使用 `--cwd`。"
     "\n3. **Pip**: 在Conda环境中使用pip时，必须通过 `conda run -n <ENV_NAME_PLACEHOLDER> python -m pip ...` 调用。"
-    "\n4. **通用命令**: 你可以使用 `dir`, `tree /F` (查看目录结构), `type` (查看文件内容，但优先使用 `files_to_read` JSON字段让系统读取), `curl` (下载文件)。"
+    "\n4. **通用命令**: 你可以使用 `dir`, `tree /F` (查看目录结构), `type` (查看文件内容，但优先使用 `files_to_read` JSON字段让系统读取), `curl` (下载文件)。你还可以使用命令来修改文件内容，或者创建文件副本。"
     "\n\n--- 交互流程与输出示例 (你的输出应仅为花括号内的JSON内容) ---"
     "\n**示例1: 初始分析，LLM决定先读取文件 (当前任务状态: 目标环境名 'proj_env', 项目根目录 'C:\\cloned\\my_proj', README摘要 '见下文')**"  # 更明确地指示状态
     "\n{\n"
@@ -165,7 +165,7 @@ def build_llm_input_for_client(
 
         # 截断标准输出和标准错误，以防它们过长导致LLM崩溃
         # 这些片段主要用于LLM理解命令是否成功及原因
-        max_cmd_output_snippet = MAX_CONVERSATION_HISTORY_CHARS // (MAX_HISTORY_ITEMS or 1) // 3  # 每个历史条目中命令输出的最大长度
+        max_cmd_output_snippet = 30000#MAX_CONVERSATION_HISTORY_CHARS // (MAX_HISTORY_ITEMS or 1) // 3  # 每个历史条目中命令输出的最大长度
         if max_cmd_output_snippet < 500: max_cmd_output_snippet = 500  # 最小保证长度
         if max_cmd_output_snippet > 30000: max_cmd_output_snippet = 30000  # 最大片段，避免单个命令输出过长
 
@@ -413,7 +413,7 @@ def read_project_files(sid: str, project_root: str, relative_paths: List[str]) -
                     project_file_cache[rel_path] = content
                     current_read_chars_this_call += len(content)
                     socketio.emit('status_update',
-                                  {'message': f"已读取文件 '{rel_path_raw}' (大小: {len(content)}字符, 可能已截断)。",
+                                  {'message': f"已读取文件 '{rel_path_raw}' (大小: {len(content)}字符)。",
                                    'type': 'info'}, room=sid, namespace='/')
                 elif not (rel_path_raw in contents):  # If content became empty and not already marked as error
                     contents[rel_path_raw] = "[错误：文件内容截断后为空或读取问题]"
@@ -500,7 +500,8 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
                 os.makedirs(clone_base_dir, exist_ok=True)
             except OSError as e:
                 socketio.emit('error_message', {'message': f"创建克隆目录失败: {e}", 'type': 'error'}, room=sid,
-                              namespace='/'); return
+                              namespace='/');
+                return
 
             project_cloned_root_path = os.path.abspath(os.path.join(clone_base_dir, project_name_for_dir))
             step_data['project_cloned_root_path'] = project_cloned_root_path
@@ -514,7 +515,8 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
                     shutil.rmtree(project_cloned_root_path)
                 except Exception as e:
                     socketio.emit('error_message', {'message': f"清理旧目录失败: {e}", 'type': 'error'}, room=sid,
-                                  namespace='/'); return
+                                  namespace='/');
+                    return
 
             socketio.emit('status_update', {'message': f"开始克隆: {git_url}...", 'type': 'info'}, room=sid,
                           namespace='/')
@@ -528,6 +530,57 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
                 return
             socketio.emit('status_update', {'message': "仓库克隆成功。", 'type': 'success'}, room=sid, namespace='/')
 
+            # <<< START OF ADDED CODE FOR DIRECTORY LISTING >>>
+            dir_listing_content = "无法获取项目根目录的列表。"
+            # System prompt states "Windows", so 'dir' is appropriate.
+            dir_command_to_execute_list = ["cmd", "/c", "dir"]  # <--- 修改：定义为列表
+            dir_command_display_for_log = subprocess.list2cmdline(dir_command_to_execute_list)  # 用于日志显示
+
+            socketio.emit('status_update', {
+                'message': f"正在获取项目根目录 '{project_cloned_root_path}' 的文件列表 (使用 '{dir_command_display_for_log}' 命令)...",
+                # <--- 修改：使用新的显示名称
+                'type': 'info'
+            }, room=sid, namespace='/')
+
+            # Execute dir command. stream_command_output will also send 'command_stream' events to UI.
+            dir_execution_result = stream_command_output( sid, dir_command_to_execute_list, working_dir=project_cloned_root_path )
+            # This specific dir_execution_result is NOT added to conversation_history here,
+            # as its output is part of the initial prompt construction.
+
+            if dir_execution_result.get('return_code', -1) == 0:
+                raw_dir_stdout = dir_execution_result.get('stdout', "目录列表为空或获取时遇到问题。").strip()
+                max_len_for_dir_output = 40000  # Max characters of dir output to include in prompt
+                if len(raw_dir_stdout) > max_len_for_dir_output:
+                    dir_listing_content = raw_dir_stdout[:max_len_for_dir_output] + \
+                                          f"\n... (目录列表过长，总计 {len(raw_dir_stdout)} 字符, 已截断显示前 {max_len_for_dir_output} 字符)"
+                else:
+                    dir_listing_content = raw_dir_stdout
+
+                if not dir_listing_content:  # Handle case where stdout was empty or only whitespace
+                    dir_listing_content = "(目录列表为空)"
+
+                socketio.emit('status_update', {
+                    'message': f"成功获取项目根目录文件列表 (原始长度: {len(raw_dir_stdout)} chars, 用于提示词长度: {len(dir_listing_content)} chars).",
+                    'type': 'info'
+                }, room=sid, namespace='/')
+            else:
+                error_detail = dir_execution_result.get('stderr', "无详细错误信息。").strip()
+                base_error_message = f"获取项目根目录列表失败 (命令: '{subprocess.list2cmdline(dir_command_to_execute_list)}', 返回码: {dir_execution_result.get('return_code')})."
+                if error_detail:
+                    dir_listing_content = f"{base_error_message}\n错误详情: {error_detail}"
+                else:  # If stderr is empty, check stdout for any info
+                    stdout_detail = dir_execution_result.get('stdout', '').strip()
+                    if stdout_detail:
+                        dir_listing_content = f"{base_error_message}\n标准输出: {stdout_detail}"
+                    else:
+                        dir_listing_content = base_error_message
+
+                socketio.emit('status_update', {
+                    'message': f"获取项目根目录文件列表失败. 详情: {dir_listing_content}",
+                    'type': 'warning'  # Warning, as we can still proceed with README etc.
+                }, room=sid, namespace='/')
+            # <<< END OF ADDED CODE FOR DIRECTORY LISTING >>>
+
             # Read README and store its summary globally and in step_data for this turn
             readme_content_for_prompt = "未找到README文件或读取时出错。"
             possible_readme_files = ["README.md", "readme.md", "README.rst", "README.txt", "README", "ReadMe.md"]
@@ -536,39 +589,44 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
                 if os.path.isfile(p):
                     try:
                         with open(p, 'r', encoding='utf-8', errors='replace') as f:
-                            # Read a significant portion for the initial prompt, but not necessarily the whole thing if huge
-                            # The full content can be cached if LLM later asks for this specific file by name.
                             full_readme_content = f.read()
-                            project_file_cache[name] = full_readme_content  # Cache full content
-                            # For the prompt, use a large summary.
+                            project_file_cache[name] = full_readme_content
                             readme_content_for_prompt = full_readme_content[:MAX_CONVERSATION_HISTORY_CHARS // 8]
                             if len(full_readme_content) > len(readme_content_for_prompt):
                                 readme_content_for_prompt += "\n... (README内容过长，此处为摘要)"
 
                         initial_readme_name = name;
                         step_data['initial_readme_name'] = name
-                        initial_readme_summary_for_llm = readme_content_for_prompt  # Store globally for system prompt
-                        current_readme_summary = readme_content_for_prompt  # Use for this turn's user query
-                        step_data['readme_summary_for_llm'] = readme_content_for_prompt  # Pass in step_data too
+                        initial_readme_summary_for_llm = readme_content_for_prompt
+                        current_readme_summary = readme_content_for_prompt
+                        step_data['readme_summary_for_llm'] = readme_content_for_prompt
                         socketio.emit('status_update', {'message': f"{name} 已找到并读取摘要。", 'type': 'info'},
                                       room=sid, namespace='/');
                         break
                     except Exception as e:
-                        readme_content_for_prompt = f"读取{name}错误: {e}"; initial_readme_summary_for_llm = readme_content_for_prompt; break
-            if not initial_readme_name:  # If no readme found after loop
-                initial_readme_summary_for_llm = readme_content_for_prompt  # Store "not found" message
+                        readme_content_for_prompt = f"读取{name}错误: {e}";
+                        initial_readme_summary_for_llm = readme_content_for_prompt;
+                        break
+            if not initial_readme_name:
+                initial_readme_summary_for_llm = readme_content_for_prompt
                 current_readme_summary = readme_content_for_prompt
                 step_data['readme_summary_for_llm'] = readme_content_for_prompt
 
             current_user_query_segment = (
                 f"任务：为新克隆的Git仓库 '{git_url}' (项目名: {project_name_for_dir}) 进行Conda环境配置。\n"
-                f"当前系统提示中已包含目标Conda环境名称 '{env_name}'、项目根目录 '{project_cloned_root_path}' 以及下方提供的README摘要。请基于这些信息进行分析。\n"
+                f"当前系统提示中已包含目标Conda环境名称 '{env_name}'、项目根目录 '{project_cloned_root_path}' 以及下方提供的README摘要。请基于这些信息进行分析。\n\n"
+                # <<< MODIFIED PART: Inserted directory listing information >>>
+                f"以下是当前项目根目录 (`{project_cloned_root_path}`) 下的目录列表 " # <--- 修改：描述更通用
+                f"这里也是你所有文件相关操作的默认工作目录:\n"
+                f"```text\n{dir_listing_content}\n```\n\n"
+                # <<< END OF MODIFIED PART >>>
                 f"项目 README ('{initial_readme_name or '未找到'}') 内容摘要如下:\n```text\n{readme_content_for_prompt}\n```\n\n"
                 f"请进行初步分析。如果需要查看项目中的其他文件以获取更详细的配置信息，请在 `files_to_read` 中列出它们的相对路径。"
                 f"如果你认为已有足够信息，请在 `commands_to_execute` 字段中提供操作命令。"
             )
             add_to_conversation_history("user_input_to_llm", {
-                "context_summary": f"初始分析请求：项目 {project_name_for_dir}, README({initial_readme_name or 'N/A'})摘要已提供."},
+                "context_summary": f"初始分析请求：项目 {project_name_for_dir}, 目录列表和README({initial_readme_name or 'N/A'})摘要已提供."},
+                                        # Updated context summary
                                         env_name_at_time=env_name)
 
         elif step_data.get('step_type') == 'llm_output_retry':
@@ -581,14 +639,12 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
         else:  # 'feedback' or 'feedback_after_read'
             prev_res = step_data.get('previous_command_result', {})
             files_read = step_data.get('files_just_read_content', {})
-            # ... (feedback_parts formatting - ensure it uses the new max_cmd_output_snippet logic if applied within build_llm_input_for_client) ...
-            # For current_user_query_segment, provide concise feedback. Full details are in history.
             feedback_parts = []
             if files_read:
                 feedback_parts.append("\n--- 系统已读取你请求的文件，内容如下（或摘要） ---")
                 for path, content_val in files_read.items():
-                    display_content = str(content_val)[:10000]  # Show a large snippet in this turn's prompt
-                    if len(str(content_val)) > 10000: display_content += "\n...(文件内容过长，此处为摘要)..."
+                    display_content = str(content_val)[:100000]
+                    if len(str(content_val)) > 100000: display_content += "\n...(文件内容过长，此处为摘要)..."
                     feedback_parts.append(f"文件 '{path}':\n```text\n{display_content}\n```\n")
             if prev_res and prev_res.get("command_executed"):
                 feedback_parts.append(f"\n--- 上一步命令执行反馈 ---")
@@ -616,16 +672,14 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
             current_user_query_segment,
             project_cloned_root_path or "尚未确定",
             env_name,
-            current_readme_summary  # Pass the current README summary
+            current_readme_summary
         )
-        llm_client.system_prompt_content = final_system_prompt  # Update client's system prompt
+        llm_client.system_prompt_content = final_system_prompt
 
-        # ... (LLM call, JSON parsing, validation - use the stricter valid_json_structure from your last code)
-        # ... (Action phase - ensure next_step_data_base includes 'determined_env_name': env_name and 'readme_summary_for_llm': current_readme_summary)
         socketio.emit('llm_prompt_sent', {
-            'prompt_head': final_system_prompt[:3000] + f"... (SysPrompt Total: {len(final_system_prompt)} chars)",
+            'prompt_head': final_system_prompt[:300000] + f"... (SysPrompt Total: {len(final_system_prompt)} chars)",
             'prompt_tail': f"... (UserInput Total: {len(full_user_input_with_history)} chars) ..." + full_user_input_with_history[
-                                                                                                     -3000:]},
+                                                                                                     -300000:]},
                       room=sid, namespace='/')
 
         socketio.emit('status_update', {'message': "请求LLM分析及指令...", 'type': 'info'}, room=sid, namespace='/')
@@ -637,17 +691,20 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
                 if event_type == "delta_content" and content_chunk_val is not None:
                     accumulated_llm_text += content_chunk_val
                     socketio.emit('llm_general_stream', {'token': content_chunk_val}, room=sid, namespace='/');
-                    socketio.sleep(0.005)  # Slightly more sleep
+                    socketio.sleep(0.005)
                 elif event_type == "error":
                     socketio.emit('error_message',
                                   {'message': f"LLM流式响应错误: {content_chunk_val}", 'type': 'error'}, room=sid,
-                                  namespace='/'); break
+                                  namespace='/');
+                    break
                 elif event_type == "stream_end":
                     socketio.emit('status_update', {'message': "LLM流式响应接收完毕。", 'type': 'info'}, room=sid,
-                                  namespace='/'); break
+                                  namespace='/');
+                    break
         except Exception as e:
             socketio.emit('error_message', {'message': f"LLM get_response_stream调用错误: {e}", 'type': 'error'},
-                          room=sid, namespace='/'); return
+                          room=sid, namespace='/');
+            return
 
         if not accumulated_llm_text.strip(): socketio.emit('status_update',
                                                            {'message': "LLM响应为空。", 'type': 'warning'}, room=sid,
@@ -706,10 +763,10 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
             'text': f"LLM决策总结:\n{json_object_parsed['thought_summary']}"}, room=sid, namespace='/')
 
         files_to_read_now = [f for f in files_list if
-                             isinstance(f, str) and f.strip()]  # Use already fetched files_list
+                             isinstance(f, str) and f.strip()]
 
         actual_commands_to_run: List[Tuple[str, str]] = []
-        for cmd_obj in cmds_list:  # Use already fetched cmds_list
+        for cmd_obj in cmds_list:
             if isinstance(cmd_obj, dict) and isinstance(cmd_obj.get("command_line"), str) and cmd_obj[
                 "command_line"].strip():
                 original_cmd = cmd_obj["command_line"]
@@ -728,7 +785,7 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
         next_step_data_base = {'git_url': git_url, 'determined_env_name': env_name,
                                'initial_readme_name': initial_readme_name,
                                'project_cloned_root_path': project_cloned_root_path,
-                               'readme_summary_for_llm': current_readme_summary}  # Carry over readme summary
+                               'readme_summary_for_llm': current_readme_summary}
 
         if files_to_read_now:
             socketio.emit('status_update',
@@ -784,6 +841,80 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
                       namespace='/')
 
 
+@socketio.on('get_llm_config')
+def handle_get_llm_config():
+    """Sends current LLM configuration to the client."""
+    sid = request.sid
+    config_to_send = {
+        'base_url': LLM_BASE_URL,
+        'model_name': LLM_MODEL_NAME,
+        'api_key_present': bool(LLM_API_KEY and LLM_API_KEY.lower() != "none" and LLM_API_KEY.lower() != "lmstudio")
+    }
+    socketio.emit('current_llm_config', {'config': config_to_send}, room=sid, namespace='/')
+
+
+@socketio.on('update_llm_config')
+def handle_update_llm_config(data: Dict[str, str]):
+    """Updates LLM configuration based on client request."""
+    sid = request.sid
+    global LLM_API_KEY, LLM_BASE_URL, LLM_MODEL_NAME
+
+    updated_fields = []
+
+    new_base_url = data.get('base_url', '').strip()
+    new_api_key = data.get('api_key', '')
+    new_model_name = data.get('model_name', '').strip()
+
+    if new_base_url and new_base_url != LLM_BASE_URL:
+        LLM_BASE_URL = new_base_url
+        updated_fields.append("Base URL")
+
+    if new_api_key != LLM_API_KEY:
+        if not new_api_key:
+            LLM_API_KEY = os.environ.get("LMSTUDIO_API_KEY", "lmstudio")
+        else:
+            LLM_API_KEY = new_api_key
+        updated_fields.append("API Key")
+
+    if new_model_name and new_model_name != LLM_MODEL_NAME:
+        LLM_MODEL_NAME = new_model_name
+        updated_fields.append("Model Name")
+    elif not new_model_name and LLM_MODEL_NAME != os.environ.get("LMSTUDIO_MODEL",
+                                                                 "default_model_if_empty"):
+        LLM_MODEL_NAME = os.environ.get("LMSTUDIO_MODEL", "default_model_if_empty")
+        updated_fields.append("Model Name (reverted to default)")
+
+    if not updated_fields:
+        socketio.emit('llm_config_updated', {
+            'message': 'LLM 配置未发生变化。',
+            'type': 'info',
+            'config': {'base_url': LLM_BASE_URL, 'model_name': LLM_MODEL_NAME, 'api_key_present': bool(
+                LLM_API_KEY and LLM_API_KEY.lower() != "none" and LLM_API_KEY.lower() != "lmstudio")}
+        }, room=sid, namespace='/')
+        return
+
+    current_sys_prompt = DEFAULT_SYSTEM_PROMPT_TEMPLATE
+    if initialize_llm_client(current_sys_prompt, sid=sid):
+        msg = f"LLM 配置已更新: {', '.join(updated_fields)}. LLM 客户端已使用新配置重新初始化。"
+        print(f"SID {sid}: {msg}")
+        print(
+            f"New LLM Config: URL='{LLM_BASE_URL}', Model='{LLM_MODEL_NAME}', KeySet='{bool(LLM_API_KEY and LLM_API_KEY.lower() != 'none' and LLM_API_KEY.lower() != 'lmstudio')}'")
+        socketio.emit('llm_config_updated', {
+            'message': msg,
+            'type': 'success',
+            'config': {'base_url': LLM_BASE_URL, 'model_name': LLM_MODEL_NAME, 'api_key_present': bool(
+                LLM_API_KEY and LLM_API_KEY.lower() != "none" and LLM_API_KEY.lower() != "lmstudio")}
+        }, room=sid, namespace='/')
+    else:
+        err_msg = "LLM 配置更新后，客户端重新初始化失败。请检查配置或服务器日志。"
+        print(f"SID {sid}: Error re-initializing LLM client after config update. {err_msg}")
+        socketio.emit('llm_config_updated', {
+            'message': err_msg,
+            'type': 'error',
+            'config': {'base_url': new_base_url, 'model_name': new_model_name, 'api_key_present': bool(new_api_key)}
+        }, room=sid, namespace='/')
+
+
 @socketio.on('start_initial_setup')
 def handle_start_initial_setup(data: Dict[str, Any]):
     sid = request.sid;
@@ -792,7 +923,7 @@ def handle_start_initial_setup(data: Dict[str, Any]):
     global project_file_cache, conversation_history, initial_readme_summary_for_llm
     project_file_cache = {};
     conversation_history = [];
-    initial_readme_summary_for_llm = None  # Reset global readme summary
+    initial_readme_summary_for_llm = None
     socketio.emit('clear_history_display', {}, room=sid, namespace='/')
     if not initialize_llm_client(DEFAULT_SYSTEM_PROMPT_TEMPLATE, sid=sid):
         socketio.emit('error_message', {'message': '开始任务前LLM客户端初始化失败。', 'type': 'error'}, room=sid,
@@ -800,10 +931,10 @@ def handle_start_initial_setup(data: Dict[str, Any]):
         return
     initial_step_data = {
         'step_type': 'initial_analysis', 'git_url': git_url,
-        'env_name': env_name_frontend,  # User's preferred name, will be processed into determined_env_name
+        'env_name': env_name_frontend,
         'determined_env_name': None,
         'initial_readme_name': None,
-        'readme_summary_for_llm': None,  # Will be filled after reading
+        'readme_summary_for_llm': None,
         'project_cloned_root_path': None,
         'previous_command_result': {}, 'files_just_read_content': {}
     }
@@ -818,12 +949,12 @@ def index(): return render_template('run.html', current_system_prompt=DEFAULT_SY
 
 if __name__ == '__main__':
     print("启动Flask服务器及SocketIO...")
-    print(f"LLM配置: 模型='{LLM_MODEL_NAME}', API Key='{LLM_API_KEY[:5]}...', Base URL='{LLM_BASE_URL}'")
+    print(
+        f"LLM配置: 模型='{LLM_MODEL_NAME}', API Key='{LLM_API_KEY[:5] if LLM_API_KEY else ''}...', Base URL='{LLM_BASE_URL}'")  # Safe print for API key
     if 'llm' not in globals() or 'executor' not in globals():
         print("严重错误: llm.py 或 command_executor.py 未正确加载。")
     else:
         print(f"系统提示词模板长度 (不含动态部分): {len(DEFAULT_SYSTEM_PROMPT_TEMPLATE)} chars")
-        # Ensure executor paths are found at startup
         if platform.system() == "Windows":
             executor.find_and_set_conda_paths()
         else:

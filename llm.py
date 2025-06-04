@@ -191,7 +191,7 @@ if __name__ == "__main__":
     BASE_URL = "http://192.168.0.32:1234/v1"
     # --- ---
 
-    # SYSTEM_PROMPT_FOR_JSON_TEST (来自你之前的 llmdemo.py)
+    # SYSTEM_PROMPT_FOR_JSON_TEST
     SYSTEM_PROMPT_FOR_JSON_TEST = (
         "你是一个专业的软件工程师助手，负责协助用户自动化配置项目环境。"
         "你的思考过程请放在 <think> 和 </think> 标签之间，这部分内容会被流式显示给用户。"
@@ -207,7 +207,7 @@ if __name__ == "__main__":
         "# 示例Python项目\n依赖: requests, numpy\n请使用 Python 3.8+。\n通过 `pip install -r requirements.txt` 安装依赖。\n"
         "```\n"
         "请为这个项目在Conda中创建一个名为 'sample_env_demo' 的环境，并安装依赖。"
-        "请先思考（放在<think>标签内），然后给出JSON指令。"
+        "请先思考，然后给出JSON指令。"
     )
 
     try:
@@ -227,7 +227,7 @@ if __name__ == "__main__":
         error_occurred = False
 
         for event_type, content in client.get_response_stream(json_user_message, temperature=0.1,
-                                                              max_tokens=0):  # 增加max_tokens
+                                                              max_tokens=0):
             if event_type == "delta_content":
                 print(content, end="", flush=True)
                 full_response_content += content
