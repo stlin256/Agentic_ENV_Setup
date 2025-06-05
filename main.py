@@ -12,7 +12,7 @@ from typing import Optional, List, Dict, Any, Tuple, Union
 
 try:
     import llm
-    import command_executor as executor  # 假设 command_executor.py 已经添加了 write_file_content 函数
+    import command_executor as executor
 except ImportError as e:
     print(f"错误：导入模块失败 - {e}")
     print("请确保 llm.py 和 command_executor.py 文件位于同一目录下。")
@@ -30,10 +30,10 @@ DEFAULT_SYSTEM_PROMPT_TEMPLATE = (
     "\n2. 仔细阅读并严格遵守下方定义的“JSON对象结构规范”和“命令生成指南”。"
     "\n3. 你将分步骤接收信息：首先是项目基本信息（如Git URL，用户期望的环境名，README摘要），然后可能是你请求读取的文件内容，或者是先前命令的执行结果。"
     "\n4. 在每一步，你都需要根据当前所有已知信息（包括完整的对话历史）来决定下一步行动：是请求读取更多文件，或是访问互联网查找信息，还是生成执行命令，或者判断配置已完成。"
-    "\n\n--- 当前任务状态 (此部分信息将在每次调用时更新，请务必参考！) ---"  # 强调参考
+    "\n\n--- 当前任务状态 (此部分信息将在每次调用时更新，请务必参考！) ---"
     "\n- **项目根目录**: <PROJECT_ROOT_PATH_PLACEHOLDER>"
     "\n- **目标Conda环境名称**: <ENV_NAME_PLACEHOLDER>"
-    "\n- **从README提取的关键信息**: <README_CONTENT_PLACEHOLDER>"  # 修改：明确这是提取的信息
+    "\n- **从README提取的关键信息**: <README_CONTENT_PLACEHOLDER>" 
     "\n- **重要**: 你所有的决策和生成的命令都必须围绕以上指定的项目根目录和目标Conda环境名称进行。如果这些信息显示为“未指定”或“未提供”，请在你的`thought_summary`中指出需要这些信息才能继续，或者基于已有信息进行合理推断（例如，如果环境名未指定，你可以建议一个）。"
     "\n\n--- JSON对象结构规范 (必须严格遵守) ---"
     "\n{"
@@ -49,8 +49,8 @@ DEFAULT_SYSTEM_PROMPT_TEMPLATE = (
     "    }"
     "\n    // ... (更多命令对象) ... "
     "\n  ]\n"
-    "}\n"  # 您提供的代码中这里缺少一个逗号，如果 files_to_write 在此之后
-    "  \"files_to_write\": [ (对象数组, 可选) "  # 假设您已在提示中正确添加了此部分
+    "}\n"  
+    "  \"files_to_write\": [ (对象数组, 可选) " 
     "\n    // 每个对象代表一个要写入或创建的文件。"
     "\n    // 如果本轮指定了`files_to_read`或`commands_to_execute`，此字段通常应为空或省略，除非你明确希望在执行命令或读取文件之前/之后写入文件（通常不推荐混合）。"
     "\n    // 如果没有文件要写入，则此键可省略或设置为空数组 `[]`。"
@@ -69,7 +69,6 @@ DEFAULT_SYSTEM_PROMPT_TEMPLATE = (
     "\n   - **禁止**: 绝对禁止生成 `conda activate` 或 `source activate` 命令。在 `conda run` 中也绝对禁止使用 `--cwd`。"
     "\n3. **Pip**: 在Conda环境中使用pip时，必须通过 `conda run -n <ENV_NAME_PLACEHOLDER> python -m pip ...` 调用。"
     "\n4. **通用命令**: 你可以使用 `dir`, `tree /F` (查看目录结构), `curl` (下载文件)。你还可以使用命令来修改文件内容，或者创建文件副本。"
-    # 假设您已在此处添加了关于 files_to_write 的指南
     "\n\n--- 交互流程与输出示例 (你的输出应仅为花括号内的JSON内容) ---"
     "\n**示例1: 初始分析，LLM决定先读取文件 (当前任务状态: 目标环境名 'proj_env', 项目根目录 'C:\\cloned\\my_proj', README提取信息 '见下文')**"
     "\n{\n"
@@ -90,7 +89,7 @@ DEFAULT_SYSTEM_PROMPT_TEMPLATE = (
     "\n--- 请严格按照上述指南和JSON结构规范生成你的唯一JSON响应 ---"
 )
 
-# 新增：README提取专用系统提示
+# README提取专用系统提示
 README_EXTRACTION_SYSTEM_PROMPT = (
     "你是一个专门负责从项目README文件中提取关键信息的AI助手。你的任务是仔细阅读给定的README全文，然后识别并提取与项目【安装】、【配置】、【依赖】和【基本使用/运行方法】相关的所有重要文本片段。"
     "\n你的输出**必须**是一个符合RFC 8259标准的、单一的、完整的JSON对象。严禁在此JSON对象前后包含任何额外的文本、解释、代码块标记(如```json)、注释或任何非JSON内容。"
@@ -108,15 +107,15 @@ README_EXTRACTION_SYSTEM_PROMPT = (
     "\n请直接开始分析以下提供的README内容，并严格按照上述JSON格式输出你的提取结果。"
 )
 
-# 扩大上下文限制，同时注意性能和模型实际能力
+# 上下文限制，同时注意性能和模型实际能力
 MAX_TOTAL_PROMPT_CHARS_APPROX = 100000
 MAX_CONVERSATION_HISTORY_CHARS = 80000
 MAX_LLM_OUTPUT_TOKENS = 12000
 MAX_LLM_RETRIES = 2
 MAX_HISTORY_ITEMS = 70
 
-# 新增：LLM提示总长度的硬性限制 (系统提示 + 用户输入部分)
-MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT = 25000  # 保持不变，按用户要求
+# LLM提示总长度的硬性限制 (系统提示 + 用户输入部分)
+MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT = 25000
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_very_secret_key_please_change_it_now_!@#$%^&*()_+'
@@ -161,8 +160,7 @@ def extract_readme_info_with_llm(sid: str, readme_full_content: str, readme_file
             {"error": "LLM client not initialized.", "extraction_summary": "LLM客户端未初始化，无法提取信息。"})
 
     # 确保README内容不会超长到让提取LLM崩溃
-    # 这个长度限制应该远小于主LLM的限制，因为提取任务本身不需要太长上下文
-    max_readme_len_for_extraction = 30000  # 例如30k字符，大约7-8k token
+    max_readme_len_for_extraction = 40000
     if len(readme_full_content) > max_readme_len_for_extraction:
         readme_content_to_extract = readme_full_content[:max_readme_len_for_extraction] + \
                                     "\n\n[注意：README内容过长，已截断末尾部分进行分析]"
@@ -358,7 +356,6 @@ def build_llm_input_for_client(
                              f"  文件路径: `{filepath}`\n"
                              f"  操作状态: {'成功' if success else '失败'}\n"
                              f"  详细信息: {message}\n")
-            # +++ END OF NEW CODE for file_write_result history +++
 
             if entry_str:
                 if entry_type == "llm_structured_output":
@@ -537,15 +534,15 @@ def read_project_files(sid: str, project_root: str, relative_paths: List[str]) -
                               {'message': f"从缓存中获取文件 '{rel_path_raw}' ({len(cached_content)} chars)。",
                                'type': 'info'}, room=sid, namespace='/')
                 continue
-            # else: # 这部分逻辑现在不会执行
-            #     msg = f"从缓存读取文件 '{rel_path_raw}' 将超出本次调用总字符数限制，已跳过。"
-            #     socketio.emit('status_update', {'message': msg, 'type': 'warning'}, room=sid, namespace='/')
-            #     contents[rel_path_raw] = "[错误：超出本次文件读取总字符数限制 (来自缓存)，未加载]"
-            #     continue
+            else: # 这部分逻辑现在不会执行
+                 msg = f"从缓存读取文件 '{rel_path_raw}' 将超出本次调用总字符数限制，已跳过。"
+                 socketio.emit('status_update', {'message': msg, 'type': 'warning'}, room=sid, namespace='/')
+                 contents[rel_path_raw] = "[错误：超出本次文件读取总字符数限制 (来自缓存)，未加载]"
+                 continue
         try:
             if os.path.exists(abs_path) and os.path.isfile(abs_path):
                 file_size_bytes = os.path.getsize(abs_path)
-                # 根据您的要求，注释掉初步大小判断，但保留一个非常大的安全上限防止内存问题
+                # 注释掉初步大小判断，但保留一个非常大的安全上限防止内存问题
                 # if file_size_bytes > max_file_size_chars * 4:
                 #     msg = f"文件 '{rel_path_raw}' 初步判断过大 ({file_size_bytes}字节)，已跳过。"
                 #     socketio.emit('status_update', {'message': msg, 'type': 'warning'}, room=sid, namespace='/')
@@ -561,7 +558,7 @@ def read_project_files(sid: str, project_root: str, relative_paths: List[str]) -
                     msg = f"文件 '{rel_path_raw}' 内容极大 (超过 {very_large_file_safety_limit_chars} 字符)，已截断以保护内存。将尝试送入LLM。"
                     socketio.emit('status_update', {'message': msg, 'type': 'warning'}, room=sid, namespace='/')
 
-                # 根据您的要求，注释掉这里的 max_file_size_chars 和 total_chars_limit_this_call 截断逻辑
+                # 注释掉这里的 max_file_size_chars 和 total_chars_limit_this_call 截断逻辑
                 # if len(content) > max_file_size_chars:
                 #     content = content[:max_file_size_chars]
                 #     msg = f"文件 '{rel_path_raw}' 内容过大 (超过 {max_file_size_chars} 字符)，已截断。"
@@ -790,7 +787,7 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
             files_read = step_data.get('files_just_read_content', {})
             feedback_parts = []
             if files_read:
-                feedback_parts.append("\n--- 系统已读取你请求的文件，内容如下 ---")  # 移除了“（或摘要）”
+                feedback_parts.append("\n--- 系统已读取你请求的文件，内容如下 ---")
                 max_len_single_file_feedback = int(MAX_TOTAL_PROMPT_CHARS_HARD_LIMIT * 0.8)  # 大幅放宽，优先文件内容
                 total_len_files_feedback = 0
                 # max_total_len_files_feedback 现在不严格限制，因为最终由 build_llm_input_for_client 控制
@@ -845,7 +842,6 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
                 if not prev_res.get("all_successful", True):
                     feedback_parts.append("注意: 部分或全部文件写入操作失败。请分析上述详情，并决定下一步。")
             elif prev_res and prev_res.get("command_executed"):  # 原有的命令执行反馈
-                # +++ END OF MODIFICATION for file_write_result feedback +++
                 feedback_parts.append(f"\n--- 上一步命令执行反馈 ---")
                 feedback_parts.append(
                     f"命令: `{prev_res.get('command_executed', 'N/A')}` (返回码: {prev_res.get('return_code', 'N/A')})")
@@ -940,13 +936,10 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
         files_list = json_object_parsed.get("files_to_read", []) if json_object_parsed else []
         has_valid_files = has_files_key and isinstance(files_list, list) and len(files_list) > 0
 
-        # +++ START OF ADDED CODE for files_to_write check +++
         has_files_to_write_key = "files_to_write" in (json_object_parsed or {})
         files_to_write_list = json_object_parsed.get("files_to_write", []) if json_object_parsed else []
         has_valid_files_to_write = has_files_to_write_key and isinstance(files_to_write_list, list) and len(
             files_to_write_list) > 0
-        # +++ END OF ADDED CODE for files_to_write check +++
-
         has_thought = bool(json_object_parsed and json_object_parsed.get("thought_summary"))
         is_thought_only_valid = has_thought and not has_valid_cmds and not has_valid_files and not has_valid_files_to_write  # +++ Modified +++
 
@@ -995,7 +988,6 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
                                   {'message': f"警告：跳过格式不正确的 'files_to_write' 对象: {file_write_obj}",
                                    'type': 'warning'}, room=sid,
                                   namespace='/')
-        # +++ END OF NEW CODE for files_to_write processing +++
 
         actual_commands_to_run: List[Tuple[str, str]] = []
         for cmd_obj in cmds_list:

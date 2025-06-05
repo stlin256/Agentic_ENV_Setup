@@ -13,8 +13,8 @@ class LLMClient:
             model_name: str,
             base_url: str,
             system_prompt: str = "You are a helpful AI assistant.",
-            max_history_turns: int = 5,  # 注意：在main.py中我们为指令生成任务设置了更短的历史
-            timeout: int = 120  # 稍微增加超时时间以应对可能较慢的流
+            max_history_turns: int = 5,  # 注意：在main.py中我们为指令生成任务设置了历史长度
+            timeout: int = 300  # 增加超时时间以应对可能较慢的流
     ):
         if not api_key:
             raise ValueError("API key cannot be empty.")
@@ -181,15 +181,14 @@ class LLMClient:
         print(f"系统提示词已更新为： '{new_system_prompt}'")
 
 
-# --- Example Usage (for llm.py standalone testing) ---
+# Example Usage (for llm.py standalone testing)
 if __name__ == "__main__":
     print("LLM 客户端流式响应示例 (需要有效的API凭据和端点)")
 
-    # --- 使用你提供的配置 ---
+    # 使用你提供的配置
     API_KEY = "lmstudio"
     MODEL_NAME = "nikolaykozloff/deepseek-r1-0528-qwen3-8b"
     BASE_URL = "http://192.168.0.32:1234/v1"
-    # --- ---
 
     # SYSTEM_PROMPT_FOR_JSON_TEST
     SYSTEM_PROMPT_FOR_JSON_TEST = (

@@ -268,7 +268,7 @@ def execute_command_stream(command: Union[str, List[str]],
             f"EXECUTOR_FINAL_POPEN: Popen CMD List='{final_popen_cmd_list}', shell={shell_for_popen}, cwd={popen_kwargs.get('cwd')}, decode_as='{output_encoding}'")
         process = subprocess.Popen(final_popen_cmd_list, shell=shell_for_popen, **popen_kwargs)
 
-        # *** MODIFICATION HERE: Check if fcntl is available before using it ***
+        # Check if fcntl is available before using it
         use_threaded_reader = platform.system() == "Windows" or fcntl is None  # Use threads if on Windows OR fcntl is not imported
 
         if use_threaded_reader:
@@ -436,7 +436,7 @@ def write_file_content(
                    If False and file exists, returns an error. (Currently always True for LLM simplicity)
 
     Returns:
-        A dictionary убийств result status, similar to command execution results.
+        A dictionary result status, similar to command execution results.
     """
     if working_directory is None:
         working_directory = os.getcwd()
