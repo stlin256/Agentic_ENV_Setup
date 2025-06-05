@@ -9,14 +9,9 @@ import json
 import re
 import subprocess
 from typing import Optional, List, Dict, Any, Tuple, Union
+import llm
+import command_executor as executor
 
-try:
-    import llm
-    import command_executor as executor
-except ImportError as e:
-    print(f"错误：导入模块失败 - {e}")
-    print("请确保 llm.py 和 command_executor.py 文件位于同一目录下。")
-    exit()
 
 LLM_API_KEY = os.environ.get("LMSTUDIO_API_KEY", "lmstudio")
 LLM_MODEL_NAME = os.environ.get("LMSTUDIO_MODEL", "nikolaykozloff/deepseek-r1-0528-qwen3-8b")
@@ -664,13 +659,38 @@ def process_setup_step(sid: str, step_data: Dict[str, Any], retry_count: int = 0
         current_user_query_segment = ""
 
         if step_data.get('step_type') == 'initial_analysis':
+
             clone_base_dir = os.path.join(os.getcwd(), "cloned_projects_area")
+
+            if platform.system() == "Windows":
+                # 在Windows上，通常是 'C:\Users\YourUser\Documents'
+                # os.path.expanduser('~') 会得到 'C:\Users\YourUser'
+                documents_path = os.path.join(os.path.expanduser('~'), 'Documents')
+                if not os.path.isdir(documents_path):  # 如果文档目录不存在，则回退到用户主目录
+                    documents_path = os.path.expanduser('~')
+                clone_base_dir = os.path.join(documents_path, "AgenticClonedProjects")
+            elif platform.system() == "Linux" or platform.system() == "Darwin":  # Darwin is macOS
+                # 在Linux/macOS上，是用户的主目录，例如 '/home/youruser' 或 '/Users/youruser'
+                home_path = os.path.expanduser('~')
+                clone_base_dir = os.path.join(home_path, "AgenticClonedProjects")
+            else:  # 其他未知系统，回退到当前工作目录
+                print(f"[WARNING] 未知的操作系统类型 '{platform.system()}'，克隆基准目录将使用当前工作目录。")
+                clone_base_dir = os.path.join(os.getcwd(), "AgenticClonedProjects")
+
+            socketio.emit('status_update', {'message': f"项目克隆的基准目录设置为: {clone_base_dir}", 'type': 'info'},
+                          room=sid, namespace='/')
+
             try:
-                os.makedirs(clone_base_dir, exist_ok=True)
+                os.makedirs(clone_base_dir, exist_ok=True)  # 确保基准目录存在
             except OSError as e:
-                socketio.emit('error_message', {'message': f"创建克隆目录失败: {e}", 'type': 'error'}, room=sid,
+                socketio.emit('error_message',
+                              {'message': f"创建克隆基准目录 '{clone_base_dir}' 失败: {e}", 'type': 'error'}, room=sid,
                               namespace='/');
+                # 如果基准目录创建失败，这里应该是一个关键错误，流程无法继续
+                socketio.emit('enable_form_controls', {}, room=sid, namespace='/')  # 启用前端控件
                 return
+
+            project_cloned_root_path = os.path.abspath(os.path.join(clone_base_dir, project_name_for_dir))
 
             project_cloned_root_path = os.path.abspath(os.path.join(clone_base_dir, project_name_for_dir))
             step_data['project_cloned_root_path'] = project_cloned_root_path
