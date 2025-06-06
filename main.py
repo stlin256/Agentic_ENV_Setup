@@ -59,7 +59,7 @@ DEFAULT_SYSTEM_PROMPT_TEMPLATE = (
     "\n\n--- 命令生成指南 (Windows - 至关重要，必须严格遵守) ---"
     "\n1. **工作目录**: 所有需要访问项目文件的命令 (如 `pip install -r requirements.txt`, `python your_script.py`) 都将自动在上面“当前任务状态”中指定的 `<PROJECT_ROOT_PATH_PLACEHOLDER>` 下执行。你可以使用cd指令改变工作文件夹。"
     "\n2. **Conda环境**: "
-    "\n   - **创建**: 必须使用 `conda create -n <ENV_NAME_PLACEHOLDER> python=<版本号> -y`。请务必使用上面“当前任务状态”中指定的 `<ENV_NAME_PLACEHOLDER>` 作为环境名称。"
+    "\n   - **创建**: 必须使用 `conda create -n <ENV_NAME_PLACEHOLDER> python=<版本号> -y`。请务必使用上面“当前任务状态”中指定的 `<ENV_NAME_PLACEHOLDER>` 作为环境名称。如果项目没有明确python版本，则默认使用3.10，如果不兼容，请寻找替代版本。"
     "\n   - **在环境中执行命令**: 必须严格使用 `conda run -n <ENV_NAME_PLACEHOLDER> <命令>` 的格式。同样，请务必使用 `<ENV_NAME_PLACEHOLDER>`。例如: `conda run -n <ENV_NAME_PLACEHOLDER> python -m pip install -r requirements.txt`。"
     "\n   - **禁止**: 绝对禁止生成 `conda activate` 或 `source activate` 命令。在 `conda run` 中也绝对禁止使用 `--cwd`。"
     "\n3. **Pip**: 在Conda环境中使用pip时，必须通过 `conda run -n <ENV_NAME_PLACEHOLDER> python -m pip ...` 调用。"
